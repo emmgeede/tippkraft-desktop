@@ -1,6 +1,6 @@
 //! Formatvertrag Server → Desktop, siehe shared/FORMAT.md
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -122,6 +122,74 @@ pub fn aktionen(inhalt: &str) -> Vec<Aktion> {
     out
 }
 
+/// Abfrage im Popup: Textfeld (`optionen: None`) oder Auswahl
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Abfrage {
+    pub name: String,
+    pub optionen: Option<Vec<String>>,
+}
+
+enum Stueck<'a> {
+    Text(&'a str),
+    /// Inhalt zwischen {{ und }}
+    Klammer(&'a str),
+}
+
+/// Zerlegt nach {{…}}. "{{{{" ergibt Text "{{".
+fn stuecke(inhalt: &str) -> Vec<Stueck<'_>> {
+    let mut out = vec![];
+    let mut rest = inhalt;
+    while let Some(i) = rest.find("{{") {
+        out.push(Stueck::Text(&rest[..i]));
+        rest = &rest[i..];
+        if rest.starts_with("{{{{") {
+            out.push(Stueck::Text("{{"));
+            rest = &rest[4..];
+        } else if let Some(ende) = rest[2..].find("}}") {
+            out.push(Stueck::Klammer(&rest[2..2 + ende]));
+            rest = &rest[2 + ende + 2..];
+        } else {
+            break;
+        }
+    }
+    out.push(Stueck::Text(rest));
+    out
+}
+
+/// Abfragen in Reihenfolge des ersten Vorkommens, jeder Name einmal
+pub fn abfragen(inhalt: &str) -> Vec<Abfrage> {
+    let mut out: Vec<Abfrage> = vec![];
+    for s in stuecke(inhalt) {
+        if let Stueck::Klammer(k) = s
+            && let Some(rest) = k.strip_prefix('?')
+        {
+            let (name, optionen) = match rest.split_once(':') {
+                Some((n, o)) => (n, Some(o.split('|').map(String::from).collect())),
+                None => (rest, None),
+            };
+            if !out.iter().any(|a| a.name == name) {
+                out.push(Abfrage { name: name.into(), optionen });
+            }
+        }
+    }
+    out
+}
+
+/// Setzt Werte und Datum ein und macht aus "{{{{" ein "{{". Werte werden maskiert, damit "[[" darin Text bleibt.
+pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>, datum: &str) -> String {
+    stuecke(inhalt)
+        .into_iter()
+        .map(|s| match s {
+            Stueck::Text(t) => t.to_string(),
+            Stueck::Klammer("=datum") => datum.to_string(),
+            Stueck::Klammer(k) => match k.strip_prefix('?') {
+                Some(rest) => werte.get(rest.split(':').next().unwrap_or_default()).map(|w| w.replace("[[", "[[[[")).unwrap_or_default(),
+                None => format!("{{{{{k}}}}}"),
+            },
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,7 +198,7 @@ mod tests {
     fn liest_den_vertrag_ac15() {
         let json = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../shared/snippets.example.json")).unwrap();
         let stand = parse(&json).unwrap();
-        assert_eq!(stand.bausteine.len(), 3);
+        assert_eq!(stand.bausteine.len(), 4);
         assert_eq!(stand.ausschluesse, vec!["1password", "org.keepassxc.KeePassXC"]);
         let sig = &stand.bausteine[0];
         assert_eq!(sig.kuerzel, ";sig");
@@ -138,7 +206,16 @@ mod tests {
         assert!(!sig.wortgrenze && !sig.gross_klein_beachten && !sig.schreibweise_uebernehmen);
         assert_eq!(stand.bausteine[1].ausloeser, Ausloeser::Tab);
         assert!(stand.bausteine[1].gross_klein_beachten);
-        assert_eq!(stand.bausteine[2].ausloeser, Ausloeser::Leertaste);
+        assert_eq!(stand.bausteine[3].ausloeser, Ausloeser::Leertaste);
+        let brief = &stand.bausteine[2];
+        assert_eq!(brief.kuerzel, "brief");
+        assert_eq!(
+            abfragen(&brief.inhalt),
+            vec![
+                Abfrage { name: "Anrede".into(), optionen: Some(vec!["Herr".into(), "Frau".into()]) },
+                Abfrage { name: "Name".into(), optionen: None }
+            ]
+        );
     }
 
     #[test]
@@ -163,5 +240,23 @@ mod tests {
     fn unbekannte_tokens_bleiben_text() {
         // Der Server lässt sie nicht durch. Falls doch, lieber wörtlich tippen als verschlucken.
         assert_eq!(aktionen("[[Foo]]"), vec![Aktion::Text("[[Foo]]".into())]);
+    }
+
+    #[test]
+    fn abfragen_einmal_pro_name_in_reihenfolge_ac6() {
+        let a = abfragen("{{?Name}} {{?Gruß:Viele Grüße|}} {{=datum}} {{{{?nicht}} {{?Name}}");
+        assert_eq!(a, vec![Abfrage { name: "Name".into(), optionen: None }, Abfrage { name: "Gruß".into(), optionen: Some(vec!["Viele Grüße".into(), "".into()]) }]);
+        assert!(abfragen("nur {{=datum}} und [[Tab]]").is_empty());
+    }
+
+    #[test]
+    fn einsetzen_ac5_ac7_ac8() {
+        let werte = std::collections::HashMap::from([("Name".to_string(), "Muster [[Tab]] {{=datum}}".to_string()), ("Anrede".to_string(), "Frau".to_string())]);
+        assert_eq!(
+            einsetzen("{{?Anrede:Herr|Frau}} {{?Name}}, {{=datum}} {{{{?x}} {{?Name}} {{unbekannt}}", &werte, "04.11.2026"),
+            // Werte werden maskiert: [[ → [[[[, damit sie Text bleiben. {{=datum}} im Wert bleibt Text.
+            "Frau Muster [[[[Tab]] {{=datum}}, 04.11.2026 {{?x}} Muster [[[[Tab]] {{=datum}} {{unbekannt}}"
+        );
+        assert_eq!(aktionen(&einsetzen("{{?Name}}", &werte, "x")), vec![Aktion::Text("Muster [[Tab]] {{=datum}}".into())]);
     }
 }

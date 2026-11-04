@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "wayland", "default_fonts"] }
+egui = { version = "0.37.0", default-features = false }
 evdev = "0.13.2"
 rustix = { version = "1.1.6", features = ["event", "fs", "rand", "system", "time"] }
 serde = { version = "1.0.229", features = ["derive"] }

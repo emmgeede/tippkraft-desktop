@@ -11,7 +11,7 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 | `version` | Zahl | Formatversion, aktuell `1`. Der Desktop lehnt unbekannte Versionen ab und behält seinen letzten Stand |
 | `bausteine` | Liste | Nur Bausteine, die auslösen dürfen (aktiv und in aktiver oder keiner Gruppe). Sortiert nach `lower(kuerzel)` in Zeichencode-Reihenfolge |
 | `bausteine[].kuerzel` | Text | 1 bis 64 Zeichen, keine Leer- oder Steuerzeichen |
-| `bausteine[].inhalt` | Text | Einzufügender Text, Zeilenumbruch immer `\n`, keine Steuerzeichen außer `\t` und `\n`. Kann Tasten-Tokens enthalten (siehe unten). Verweise `{{kürzel}}` hat der Server schon aufgelöst. Ein `{{` im Inhalt ist deshalb immer wörtlicher Text |
+| `bausteine[].inhalt` | Text | Einzufügender Text, Zeilenumbruch immer `\n`, keine Steuerzeichen außer `\t` und `\n`. Kann Tasten-Tokens enthalten (siehe unten). Verweise `{{kürzel}}` hat der Server schon aufgelöst. Übrig bleiben Platzhalter und `{{{{` (siehe unten) |
 | `bausteine[].ausloeser` | `"sofort"` \| `"leertaste"` \| `"enter"` \| `"tab"` | Was die Ersetzung auslöst. Der Auslöser selbst wird verbraucht, nicht mitgesendet |
 | `bausteine[].wortgrenze` | bool | `true`: Vor dem Kürzel muss eine Wortgrenze stehen (Pufferanfang, Leerzeichen, Satzzeichen) |
 | `bausteine[].grossKleinBeachten` | bool | `false`: `MFG` löst `mfg` aus |
@@ -24,3 +24,12 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 - Erlaubte Namen (Groß-/Kleinschreibung zählt): `Tab`, `Enter`, `Space`, `Backspace`, `Delete`, `Escape`, `Left`, `Right`, `Up`, `Down`, `Home`, `End`.
 - `[[[[` steht für ein wörtliches `[[`. Im Beispiel ergibt `[[[[kein Token]]` den Text `[[kein Token]]`.
 - Der Server garantiert, dass jeder Inhalt nur gültige Tokens enthält. Ein `[[` ohne `]]` kommt nicht vor.
+
+## Platzhalter im Inhalt (F8)
+
+Der Desktop füllt sie beim Auslösen aus, der Server prüft nur die Syntax:
+
+- `{{?Name}}`: Textfeld im Popup. `{{?Name:a|b|…}}`: Auswahl (2 bis 20 Optionen, leere Option erlaubt). Gleicher Name wird einmal abgefragt.
+- `{{=datum}}`: heutiges Datum `TT.MM.JJJJ`, ohne Popup.
+- `{{{{` steht für ein wörtliches `{{`. Der Server gibt es unverändert weiter, auch aus eingebundenen Bausteinen.
+- Reihenfolge auf dem Desktop: Platzhalter und `{{{{` ersetzen (eingegebene Werte mit `[[` werden zu `[[[[` maskiert), danach Tasten-Tokens auswerten.

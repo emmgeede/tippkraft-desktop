@@ -12,7 +12,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use evdev::uinput::VirtualDevice;
 use evdev::{AttributeSet, Device, EventType, InputEvent, KeyCode};
-use tippkraft::engine::{Eingabe, Engine, Entscheidung};
+use tippkraft::engine::{Eingabe, Engine, Entscheidung, nach_popup};
+use tippkraft::format::Aktion;
 use tippkraft::format::{self, Stand};
 use tippkraft::sync::{self, Pfade, Verbindung, Zugang};
 use tippkraft::{niri, steuerung, wayland};
@@ -36,6 +37,8 @@ enum Ereignis {
     Fokus(Option<String>),
     Sync(sync::Meldung),
     Steuerung(String, Sender<String>),
+    /// Popup geschlossen: Werte oder `None` bei Abbruch (F8)
+    PopupFertig { werte: Option<std::collections::HashMap<String, String>>, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion> },
 }
 
 fn main() {
@@ -48,6 +51,7 @@ fn main() {
         Some("status") => status(&pfade),
         Some("pause") => pause(&pfade),
         Some("einrichten") => einrichten(),
+        Some("popup") => popup(),
         _ => {
             println!("{HILFE}");
             return;
@@ -57,6 +61,36 @@ fn main() {
         eprintln!("tippkraft: {e}");
         std::process::exit(1);
     }
+}
+
+/// `tippkraft popup`: vom Daemon gestartet, Anfrage auf stdin, Werte auf stdout, Exit 1 bei Abbruch
+fn popup() -> Result<(), String> {
+    let anfrage: tippkraft::popup::Anfrage = serde_json::from_reader(std::io::stdin()).map_err(|e| format!("Popup-Anfrage: {e}"))?;
+    match tippkraft::popup::zeigen(anfrage)? {
+        Some(werte) => {
+            println!("{}", serde_json::to_string(&tippkraft::popup::Antwort { werte }).unwrap());
+            Ok(())
+        }
+        None => std::process::exit(1),
+    }
+}
+
+/// Startet das Popup als eigenen Prozess, damit die Hauptschleife (Tastenweitergabe, Watchdog) weiterläuft
+fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion>, datum: String) {
+    std::thread::spawn(move || {
+        let programm = std::env::var_os("TIPPKRAFT_POPUP").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| "tippkraft".into());
+        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum }).unwrap();
+        let werte = (|| {
+            let mut kind = std::process::Command::new(&programm).arg("popup").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().ok()?;
+            std::io::Write::write_all(&mut kind.stdin.take()?, anfrage.as_bytes()).ok()?;
+            let out = kind.wait_with_output().ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            serde_json::from_slice::<tippkraft::popup::Antwort>(&out.stdout).ok().map(|a| a.werte)
+        })();
+        let _ = tx.send(Ereignis::PopupFertig { werte, loeschen, inhalt, gross, abbruch });
+    });
 }
 
 fn benachrichtigen(text: &str) {
@@ -454,6 +488,23 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 let _ = antwort.send(text);
                 continue;
             }
+            Ereignis::PopupFertig { werte, loeschen, inhalt, gross, abbruch } => {
+                let (loeschen, aktionen) = match werte {
+                    Some(w) => (loeschen, nach_popup(&inhalt, &w, &engine.datum(), gross)),
+                    // Abbruch: nichts löschen, nur den zurückgehaltenen Auslöser nachholen
+                    None => (0, abbruch),
+                };
+                if o.trocken {
+                    println!("ersetzen loeschen={loeschen} {aktionen:?}");
+                } else {
+                    // Fokus muss erst ins ursprüngliche Fenster zurück. ponytail: feste Wartezeit statt Fokus-Ereignis abwarten
+                    std::thread::sleep(Duration::from_millis(200));
+                    if let Err(e) = wl.tippen(loeschen, &aktionen, o.verzoegerung, || herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
+                        eprintln!("tippkraft: Ausgabe fehlgeschlagen: {e}");
+                    }
+                }
+                continue;
+            }
             Ereignis::Taste { key, wert } => (key, wert),
         };
         if test_haengen {
@@ -512,6 +563,10 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 let entscheidung = eingabe.map_or(Entscheidung::Durchlassen, |e| engine.eingabe(e));
                 match entscheidung {
                     Entscheidung::Durchlassen => weiter(1),
+                    Entscheidung::Popup { titel, loeschen, inhalt, gross, abbruch } => {
+                        zurueckgehalten.insert(key);
+                        popup_starten(tx.clone(), titel, loeschen, inhalt, gross, abbruch, engine.datum());
+                    }
                     Entscheidung::Ersetzen { loeschen, aktionen } => {
                         zurueckgehalten.insert(key);
                         if o.trocken {

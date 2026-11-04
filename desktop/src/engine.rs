@@ -1,7 +1,10 @@
 //! Kernlogik: Puffer, Kürzel-Erkennung, Auslöser, Schreibweise, Rückgängig.
 //! Ohne Tastatur und ohne Wayland, damit alles per Unit-Test prüfbar ist.
 
-use crate::format::{Aktion, Ausloeser, Baustein, Stand, aktionen};
+use crate::format::{Aktion, Ausloeser, Baustein, Stand, Taste, abfragen, aktionen, einsetzen};
+
+/// Fenster des Abfrage-Popups. Darin löst tippkraft nie aus (F8).
+pub const POPUP_APP_ID: &str = "tippkraft-popup";
 
 const PUFFER_MAX: usize = 64;
 
@@ -24,6 +27,8 @@ pub enum Entscheidung {
     Durchlassen,
     /// Taste zurückhalten, `loeschen` Zeichen per Backspace entfernen, dann `aktionen` ausführen
     Ersetzen { loeschen: usize, aktionen: Vec<Aktion> },
+    /// Taste zurückhalten und Popup öffnen. Danach `nach_popup` tippen oder bei Abbruch `abbruch`.
+    Popup { titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion> },
 }
 
 /// Getippte Zeichen. Debug zeigt bewusst nur die Länge (Prinzip 2).
@@ -58,11 +63,12 @@ pub struct Engine {
     puffer: Puffer,
     letzte: Option<Rueckgaengig>,
     ausgeschlossen: bool,
+    festes_datum: Option<String>,
 }
 
 impl Engine {
     pub fn new(stand: Stand) -> Self {
-        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false };
+        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None };
         e.stand(stand);
         e
     }
@@ -78,7 +84,16 @@ impl Engine {
     /// Fokus auf ein anderes Fenster: Puffer verwerfen, Ausschlussliste prüfen
     pub fn fokus(&mut self, app_id: Option<&str>) {
         self.reset();
-        self.ausgeschlossen = app_id.is_some_and(|a| self.ausschluesse.contains(&a.to_lowercase()));
+        self.ausgeschlossen = app_id.is_some_and(|a| a == POPUP_APP_ID || self.ausschluesse.contains(&a.to_lowercase()));
+    }
+
+    /// Nur für Tests: festes Datum statt heute
+    pub fn datum_fest(&mut self, d: &str) {
+        self.festes_datum = Some(d.into());
+    }
+
+    pub fn datum(&self) -> String {
+        self.festes_datum.clone().unwrap_or_else(heute)
     }
 
     pub fn anzahl(&self) -> usize {
@@ -159,23 +174,42 @@ impl Engine {
 
     /// `zurueckgehalten`: Zeichen des Kürzels, die nie ans Programm gingen. `nachsatz`: verbrauchter Auslöser für Rückgängig.
     fn ersetzen(&mut self, b: Baustein, getippt: String, zurueckgehalten: usize, nachsatz: &str) -> Entscheidung {
-        let mut akt = aktionen(&b.inhalt);
-        if !b.gross_klein_beachten
-            && b.schreibweise_uebernehmen
-            && gross_anfang(&getippt)
-            && let Some(Aktion::Text(t)) = akt.iter_mut().find(|a| matches!(a, Aktion::Text(_)))
-        {
-            let mut cs = t.chars();
-            if let Some(first) = cs.next() {
-                *t = first.to_uppercase().chain(cs).collect();
-            }
+        let gross = !b.gross_klein_beachten && b.schreibweise_uebernehmen && gross_anfang(&getippt);
+        let loeschen = getippt.chars().count() - zurueckgehalten;
+        self.puffer.0.clear();
+        if !abfragen(&b.inhalt).is_empty() {
+            self.letzte = None;
+            // Bei Abbruch den zurückgehaltenen Auslöser nachholen, als wäre nichts passiert
+            let abbruch = match b.ausloeser {
+                Ausloeser::Sofort => vec![Aktion::Text(getippt.chars().last().map(String::from).unwrap_or_default())],
+                Ausloeser::Leertaste => vec![Aktion::Text(" ".into())],
+                Ausloeser::Enter => vec![Aktion::Taste(Taste::Enter, 1)],
+                Ausloeser::Tab => vec![Aktion::Taste(Taste::Tab, 1)],
+            };
+            return Entscheidung::Popup { titel: getippt, loeschen, inhalt: b.inhalt, gross, abbruch };
         }
+        let akt = nach_popup(&b.inhalt, &Default::default(), &self.datum(), gross);
         let nur_text = akt.iter().all(|a| matches!(a, Aktion::Text(_)));
         let eingefuegt = akt.iter().map(|a| if let Aktion::Text(t) = a { t.chars().count() } else { 0 }).sum();
-        self.puffer.0.clear();
         self.letzte = nur_text.then(|| Rueckgaengig { eingefuegt, wiederherstellen: format!("{getippt}{nachsatz}") });
-        Entscheidung::Ersetzen { loeschen: getippt.chars().count() - zurueckgehalten, aktionen: akt }
+        Entscheidung::Ersetzen { loeschen, aktionen: akt }
     }
+}
+
+/// Fertige Aktionen: Werte und Datum einsetzen, Tokens auswerten, ggf. ersten Buchstaben großschreiben
+pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String>, datum: &str, gross: bool) -> Vec<Aktion> {
+    let mut akt = aktionen(&einsetzen(inhalt, werte, datum));
+    if gross && let Some(Aktion::Text(t)) = akt.iter_mut().find(|a| matches!(a, Aktion::Text(_))) {
+        let mut cs = t.chars();
+        if let Some(first) = cs.next() {
+            *t = first.to_uppercase().chain(cs).collect();
+        }
+    }
+    akt
+}
+
+fn heute() -> String {
+    chrono::Local::now().format("%d.%m.%Y").to_string()
 }
 
 /// Großer Anfangsbuchstabe, aber nicht komplett groß (bei mehr als einem Buchstaben)
@@ -367,5 +401,42 @@ mod tests {
         let mut e = engine(vec![]);
         e.stand(Stand { version: 1, bausteine: vec![b("mfg", "x", Ausloeser::Leertaste)], ausschluesse: vec![] });
         assert_eq!(tippe(&mut e, "mfg ").last(), Some(&ersetzt(3, "x")));
+    }
+
+    // ---------- F8 ----------
+
+    #[test]
+    fn datum_ohne_popup_ac5() {
+        let mut e = engine(vec![b("dat", "Stand: {{=datum}}", Ausloeser::Leertaste)]);
+        e.datum_fest("04.11.2026");
+        assert_eq!(tippe(&mut e, "dat ").last(), Some(&ersetzt(3, "Stand: 04.11.2026")));
+    }
+
+    #[test]
+    fn abfragen_oeffnen_das_popup_ac6_ac9() {
+        let inhalt = "{{?Anrede:Herr|Frau}} {{?Name}}";
+        let mut e = engine(vec![b("brief", inhalt, Ausloeser::Leertaste), b(";p", inhalt, Ausloeser::Sofort), b("pe", inhalt, Ausloeser::Enter)]);
+        let erwartet = |loeschen, gross, abbruch| Entscheidung::Popup { titel: "brief".into(), loeschen, inhalt: inhalt.into(), gross, abbruch };
+        assert_eq!(tippe(&mut e, "brief ").last(), Some(&erwartet(5, false, vec![Aktion::Text(" ".into())])));
+        assert!(matches!(tippe(&mut e, "Brief ").last(), Some(Entscheidung::Popup { titel, gross: true, .. }) if titel == "Brief"));
+        assert!(matches!(tippe(&mut e, ";p").last(), Some(Entscheidung::Popup { loeschen: 1, abbruch, .. }) if *abbruch == vec![Aktion::Text("p".into())]));
+        tippe(&mut e, "pe");
+        assert!(matches!(e.eingabe(Eingabe::Enter), Entscheidung::Popup { abbruch, .. } if abbruch == vec![Aktion::Taste(Taste::Enter, 1)]));
+        // kein Rückgängig nach Popup-Bausteinen
+        assert_eq!(e.eingabe(Eingabe::Backspace), Entscheidung::Durchlassen);
+    }
+
+    #[test]
+    fn nach_dem_popup_ausfuellen_ac7() {
+        let werte = std::collections::HashMap::from([("Anrede".to_string(), "frau".to_string()), ("Name".to_string(), "Muster".to_string())]);
+        assert_eq!(nach_popup("{{?Anrede:Herr|frau}} {{?Name}}, {{=datum}}", &werte, "04.11.2026", true), vec![Aktion::Text("Frau Muster, 04.11.2026".into())]);
+        assert_eq!(nach_popup("{{?Name}}[[Tab]]", &werte, "x", false), vec![Aktion::Text("Muster".into()), Aktion::Taste(Taste::Tab, 1)]);
+    }
+
+    #[test]
+    fn im_popup_loest_nichts_aus_ac10() {
+        let mut e = engine(vec![b("mfg", "x", Ausloeser::Leertaste)]);
+        e.fokus(Some(POPUP_APP_ID));
+        assert_eq!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen));
     }
 }

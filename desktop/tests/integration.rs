@@ -57,7 +57,7 @@ fn starten(name: &str, env: &[(&str, &str)]) -> Lauf {
 
 fn starten_mit(name: &str, env: &[(&str, &str)], umgebung: Vec<(String, String)>, stand: Option<&str>) -> Lauf {
     let mut keys = AttributeSet::<KeyCode>::new();
-    for k in [KeyCode::KEY_A, KeyCode::KEY_B, KeyCode::KEY_C, KeyCode::KEY_Z, KeyCode::KEY_M, KeyCode::KEY_F, KeyCode::KEY_G, KeyCode::KEY_ENTER, KeyCode::KEY_SPACE, KeyCode::KEY_BACKSPACE, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTALT] {
+    for k in [KeyCode::KEY_A, KeyCode::KEY_B, KeyCode::KEY_C, KeyCode::KEY_R, KeyCode::KEY_I, KeyCode::KEY_E, KeyCode::KEY_Z, KeyCode::KEY_M, KeyCode::KEY_F, KeyCode::KEY_G, KeyCode::KEY_ENTER, KeyCode::KEY_SPACE, KeyCode::KEY_BACKSPACE, KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTALT] {
         keys.insert(k);
     }
     let mut tastatur = VirtualDevice::builder().unwrap().name(&format!("tippkraft-test-{name}")).with_keys(&keys).unwrap().build().unwrap();
@@ -571,4 +571,41 @@ fn echter_server() {
     std::thread::sleep(Duration::from_millis(1500));
     tippen(&mut l, &[KeyCode::KEY_A, KeyCode::KEY_B, KeyCode::KEY_C, KeyCode::KEY_SPACE]);
     assert!(l.stdout.recv_timeout(Duration::from_secs(2)).unwrap().contains("Vom Server"));
+}
+
+
+// ---------- F8: Popup ----------
+
+const STAND_BRIEF: &str = r#"{"version":1,"bausteine":[{"kuerzel":"brief","inhalt":"{{?Anrede:Herr|Frau}} {{?Name}}, {{?Name}}","ausloeser":"leertaste","wortgrenze":true,"grossKleinBeachten":false,"schreibweiseUebernehmen":true}],"ausschluesse":[]}"#;
+
+/// Ersatz für das Popup-Fenster: antwortet mit festen Werten (Exit 0) oder bricht ab (Exit 1)
+fn popup_ersatz(name: &str, antwort: Option<&str>) -> String {
+    let p = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("popup-{name}.sh"));
+    let inhalt = match antwort {
+        Some(json) => format!("#!/bin/sh\ncat > '{}.anfrage'\necho '{json}'\n", p.display()),
+        None => format!("#!/bin/sh\ncat > '{}.anfrage'\nexit 1\n", p.display()),
+    };
+    std::fs::write(&p, inhalt).unwrap();
+    std::fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn popup_fuellt_aus_f8_ac6_ac7() {
+    let popup = popup_ersatz("ok", Some(r#"{"werte":{"Anrede":"Frau","Name":"Muster"}}"#));
+    let mut l = starten_mit("popup-ok", &[("TIPPKRAFT_POPUP", &popup)], umgebung("popup-ok"), Some(STAND_BRIEF));
+    tippen(&mut l, &[KeyCode::KEY_B, KeyCode::KEY_R, KeyCode::KEY_I, KeyCode::KEY_E, KeyCode::KEY_F, KeyCode::KEY_SPACE]);
+    let zeile = l.stdout.recv_timeout(Duration::from_secs(3)).expect("keine Ausgabe nach dem Popup");
+    assert_eq!(zeile, r#"ersetzen loeschen=5 [Text("Frau Muster, Muster")]"#);
+    let anfrage: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{popup}.anfrage")).unwrap()).unwrap();
+    assert_eq!(anfrage["titel"], "brief");
+    assert!(anfrage["datum"].as_str().unwrap().len() == 10);
+}
+
+#[test]
+fn popup_abbrechen_tippt_den_ausloeser_nach_f8_ac9() {
+    let popup = popup_ersatz("ab", None);
+    let mut l = starten_mit("popup-ab", &[("TIPPKRAFT_POPUP", &popup)], umgebung("popup-ab"), Some(STAND_BRIEF));
+    tippen(&mut l, &[KeyCode::KEY_B, KeyCode::KEY_R, KeyCode::KEY_I, KeyCode::KEY_E, KeyCode::KEY_F, KeyCode::KEY_SPACE]);
+    assert_eq!(l.stdout.recv_timeout(Duration::from_secs(3)).unwrap(), r#"ersetzen loeschen=0 [Text(" ")]"#);
 }
