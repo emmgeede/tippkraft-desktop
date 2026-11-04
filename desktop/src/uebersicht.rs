@@ -22,14 +22,10 @@ fn ausloeser_name(a: Ausloeser) -> &'static str {
     }
 }
 
+/// Kurzer Hinweis wie im Webtool (`auszug` in web/src/lib/bausteine.ts): eine Zeile, höchstens 80 Zeichen
 fn vorschau(inhalt: &str) -> String {
-    let kurz = |z: &str| if z.chars().count() > 120 { format!("{}…", z.chars().take(120).collect::<String>()) } else { z.to_string() };
-    let zeilen: Vec<&str> = inhalt.lines().collect();
-    let mut v = zeilen.iter().take(2).map(|z| kurz(z)).collect::<Vec<_>>().join("\n");
-    if zeilen.len() > 2 {
-        v.push_str(" …");
-    }
-    v
+    let eine = inhalt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if eine.chars().count() > 80 { format!("{}…", eine.chars().take(80).collect::<String>()) } else { eine }
 }
 
 /// Aktive zuerst, dann deaktivierte, jeweils alphabetisch
@@ -119,7 +115,8 @@ impl eframe::App for App {
                                 ui.label(RichText::new(tag).color(f.muted).size(12.5));
                             });
                         });
-                        ui.label(RichText::new(&e.vorschau).monospace().color(f.muted).size(13.0));
+                        // immer genau eine Zeile, auch wenn das Fenster schmal ist
+                        ui.add(egui::Label::new(RichText::new(&e.vorschau).monospace().color(f.muted).size(13.0)).truncate());
                     });
                     let y = ui.cursor().top();
                     ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, f.border));
@@ -182,11 +179,10 @@ mod tests {
     }
 
     #[test]
-    fn vorschau_hoechstens_zwei_zeilen() {
-        let e = eintraege(&Stand { version: 2, bausteine: vec![b("a", "eins\nzwei\ndrei", None, true), b("l", &"x".repeat(200), None, true)], ausschluesse: vec![] });
-        assert_eq!(e[0].vorschau, "eins\nzwei …");
-        assert_eq!(e[1].vorschau.chars().count(), 121);
-        assert!(e[1].vorschau.ends_with('…'));
+    fn nur_einzeiliger_auszug_wie_im_webtool() {
+        let e = eintraege(&Stand { version: 2, bausteine: vec![b("a", "eins\n\n  zwei\ndrei", None, true), b("l", &"x".repeat(20_000), None, true)], ausschluesse: vec![] });
+        assert_eq!(e[0].vorschau, "eins zwei drei");
+        assert_eq!(e[1].vorschau, format!("{}…", "x".repeat(80)));
     }
 
     #[test]
