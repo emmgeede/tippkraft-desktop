@@ -11,7 +11,7 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 | `version` | Zahl | Formatversion, aktuell `1`. Der Desktop lehnt unbekannte Versionen ab und behält seinen letzten Stand |
 | `bausteine` | Liste | Nur Bausteine, die auslösen dürfen (aktiv und in aktiver oder keiner Gruppe). Sortiert nach `lower(kuerzel)` in Zeichencode-Reihenfolge |
 | `bausteine[].kuerzel` | Text | 1 bis 64 Zeichen, keine Leer- oder Steuerzeichen |
-| `bausteine[].inhalt` | Text | Einzufügender Text, Zeilenumbruch immer `\n`, keine Steuerzeichen außer `\t` und `\n`. Kann Tasten-Tokens enthalten (siehe unten) |
+| `bausteine[].inhalt` | Text | Einzufügender Text, Zeilenumbruch immer `\n`, keine Steuerzeichen außer `\t` und `\n`. Kann Tasten-Tokens enthalten (siehe unten). Verweise `{{kürzel}}` hat der Server schon aufgelöst. Ein `{{` im Inhalt ist deshalb immer wörtlicher Text |
 | `bausteine[].ausloeser` | `"sofort"` \| `"leertaste"` \| `"enter"` \| `"tab"` | Was die Ersetzung auslöst. Der Auslöser selbst wird verbraucht, nicht mitgesendet |
 | `bausteine[].wortgrenze` | bool | `true`: Vor dem Kürzel muss eine Wortgrenze stehen (Pufferanfang, Leerzeichen, Satzzeichen) |
 | `bausteine[].grossKleinBeachten` | bool | `false`: `MFG` löst `mfg` aus |
