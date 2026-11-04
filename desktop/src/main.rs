@@ -16,21 +16,12 @@ use tippkraft::engine::{Eingabe, Engine, Entscheidung, nach_popup};
 use tippkraft::format::Aktion;
 use tippkraft::format::{self, Stand};
 use tippkraft::sync::{self, Pfade, Verbindung, Zugang};
+use tippkraft::i18n::{self, Sprache, T, tr};
 use tippkraft::{niri, steuerung, wayland};
 use xkbcommon::xkb;
 
 const WATCHDOG: Duration = Duration::from_secs(2);
 const WEITERGABE_NAME: &str = "tippkraft-weitergabe";
-const HILFE: &str = "tippkraft – Textexpander für Wayland
-
-  tippkraft einrichten            Installieren, Autostart einrichten, starten und mit dem Konto verbinden
-  tippkraft verbinden             Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
-  tippkraft status                Zustand anzeigen
-  tippkraft uebersicht            Alle Bausteine anzeigen und filtern (Mod+Alt+Leertaste)
-  tippkraft pause                 Pausieren bzw. fortsetzen (gibt die Tastatur frei)
-  tippkraft run [--verzoegerung MS] [--stand DATEI] [--geraet /dev/input/eventN] [--trocken]
-
-Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.";
 
 enum Ereignis {
     Taste { key: KeyCode, wert: i32 },
@@ -46,20 +37,22 @@ enum Ereignis {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let pfade = Pfade::aus_umgebung();
+    // Sprache aus dem gespeicherten Stand (Account), sonst Systemsprache (F15)
+    i18n::setzen(Sprache::fuer(stand_laden(&pfade.stand).sprache.as_deref()));
     let ergebnis = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..], pfade),
-        Some("verbinden") => verbinden(&pfade, &args[1..]),
-        Some("login") => Err(format!("`login` gibt es nicht mehr. Verbinden geht jetzt über den Browser: tippkraft verbinden\n\n{HILFE}")),
+        Some("verbinden" | "connect") => verbinden(&pfade, &args[1..]),
+        Some("login") => Err(format!("{}\n\n{}", tr(T::LoginWeg), tr(T::Hilfe))),
         Some("status") => status(&pfade),
         Some("pause") => pause(&pfade),
-        Some("einrichten") => einrichten(),
+        Some("einrichten" | "setup") => einrichten(),
         Some("popup") => popup(),
-        Some("uebersicht") => {
+        Some("uebersicht" | "overview") => {
             let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok()).unwrap_or_default();
             tippkraft::uebersicht::zeigen(stand, &pfade.socket.with_file_name("tippkraft-uebersicht.lock"))
         }
         _ => {
-            println!("{HILFE}");
+            println!("{}", tr(T::Hilfe));
             return;
         }
     };
@@ -109,12 +102,12 @@ fn verbinden(pfade: &Pfade, args: &[String]) -> Result<(), String> {
     let server = match args {
         [] => None,
         [o, url] if o == "--server" => Some(url.as_str()),
-        _ => return Err(format!("Aufruf: tippkraft verbinden [--server URL]\n\n{HILFE}")),
+        _ => return Err(tr(T::Hilfe).to_string()),
     };
     let browser = std::env::var("TIPPKRAFT_BROWSER").unwrap_or_else(|_| "xdg-open".into());
     match sync::verbinden(pfade, server, &browser) {
         Ok((server, n)) => {
-            let text = format!("Verbunden mit {server}, {n} Bausteine");
+            let text = i18n::f(i18n::aktuell(), T::VerbundenMit, &[&server, &n]);
             println!("{text}");
             benachrichtigen(&format!("tippkraft: {text}"));
             Ok(())
@@ -128,13 +121,13 @@ fn verbinden(pfade: &Pfade, args: &[String]) -> Result<(), String> {
 }
 
 fn status(pfade: &Pfade) -> Result<(), String> {
-    let antwort = steuerung::senden(&pfade.socket, "status").ok_or("tippkraft läuft nicht")?;
+    let antwort = steuerung::senden(&pfade.socket, "status").ok_or(tr(T::LaeuftNicht))?;
     println!("{antwort}");
     Ok(())
 }
 
 fn pause(pfade: &Pfade) -> Result<(), String> {
-    let antwort = steuerung::senden(&pfade.socket, "pause").ok_or("tippkraft läuft nicht")?;
+    let antwort = steuerung::senden(&pfade.socket, "pause").ok_or(tr(T::LaeuftNicht))?;
     let text = format!("tippkraft {antwort}");
     println!("{text}");
     benachrichtigen(&text);
@@ -178,14 +171,14 @@ fn einrichten() -> Result<(), String> {
     }
     let starter_start = home.join(".local/share/applications/tippkraft-starten.desktop");
     std::fs::create_dir_all(starter_start.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&starter_start, "[Desktop Entry]\nType=Application\nName=tippkraft starten\nComment=Textexpander starten\nExec=systemctl --user start tippkraft.service\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n").map_err(|e| e.to_string())?;
+    std::fs::write(&starter_start, "[Desktop Entry]\nType=Application\nName=Start tippkraft\nName[de]=tippkraft starten\nComment=Start the text expander\nComment[de]=Textexpander starten\nExec=systemctl --user start tippkraft.service\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n").map_err(|e| e.to_string())?;
     let starter = home.join(".local/share/applications/tippkraft-verbinden.desktop");
     std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=tippkraft verbinden\nComment=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} verbinden\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
-    println!("Eingerichtet: {} und tippkraft.service läuft.", ziel.display());
+    std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} verbinden\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
+    println!("{}", i18n::f(i18n::aktuell(), T::Eingerichtet, &[&ziel.display()]));
     let pfade = Pfade::aus_umgebung();
     if Zugang::laden(&pfade.zugang).is_some() {
-        println!("Schon verbunden. Neu verbinden: „tippkraft verbinden“ im App-Starter.");
+        println!("{}", tr(T::SchonVerbunden));
         return Ok(());
     }
     verbinden(&pfade, &[])
@@ -316,7 +309,7 @@ fn optionen(args: &[String], pfade: &mut Pfade) -> Result<Optionen, String> {
             "--geraet" => o.geraete.push(it.next().ok_or("--geraet braucht einen Pfad")?.into()),
             "--verzoegerung" => o.verzoegerung = Duration::from_millis(it.next().and_then(|v| v.parse().ok()).ok_or("--verzoegerung braucht Millisekunden")?),
             "--trocken" => o.trocken = true,
-            _ => return Err(format!("Unbekannte Option {a}\n\n{HILFE}")),
+            _ => return Err(format!("{a}?\n\n{}", tr(T::Hilfe))),
         }
     }
     Ok(o)
@@ -344,7 +337,9 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
     let mut state = xkb_state(wl.zustand.keymap.as_deref().unwrap_or_default())?;
     wl.zustand.neu = false;
 
-    let mut engine = Engine::new(stand_laden(&pfade.stand));
+    let start = stand_laden(&pfade.stand);
+    i18n::setzen(Sprache::fuer(start.sprache.as_deref()));
+    let mut engine = Engine::new(start);
     let mut stand_zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
 
     // Geräte: mit --geraet nur diese (Tests), sonst alle Tastaturen übernehmen und Zeiger nur lesen
@@ -397,7 +392,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
         use ksni::blocking::TrayMethods;
         let tx = tx.clone();
         let t = tippkraft::tray::Tray {
-            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new() },
+            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new(), sprache: i18n::aktuell() },
             senden: Box::new(move |a| drop(tx.send(Ereignis::Tray(a)))),
         };
         t.spawn().map_err(|e| eprintln!("tippkraft: kein Tray-Icon ({e})")).ok()
@@ -452,6 +447,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 verbindung,
                 anzahl: engine.anzahl(),
                 server: Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_default(),
+                sprache: i18n::aktuell(),
             };
             if tray_zustand.as_ref() != Some(&z) {
                 t.update(|t| t.zustand = z.clone());
@@ -463,7 +459,9 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             let zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
             if zeit != stand_zeit {
                 stand_zeit = zeit;
-                engine.stand(stand_laden(&pfade.stand));
+                let s = stand_laden(&pfade.stand);
+                i18n::setzen(Sprache::fuer(s.sprache.as_deref()));
+                engine.stand(s);
             }
         }
 
@@ -486,6 +484,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 continue;
             }
             Ereignis::Sync(sync::Meldung::Stand(s)) => {
+                i18n::setzen(Sprache::fuer(s.sprache.as_deref()));
                 engine.stand(s);
                 stand_zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
                 continue;
@@ -494,7 +493,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 let text = match befehl.as_str() {
                     "pause" if pausiert || greifen_ausstehend => {
                         greifen_ausstehend = true;
-                        "aktiv".to_string()
+                        tr(T::Aktiv).to_string()
                     }
                     "pause" => {
                         // Tasten, die über die Weitergabe gedrückt sind, dort loslassen, sonst hängen sie im Compositor
@@ -508,15 +507,12 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                         }
                         engine.eingabe(Eingabe::Zuruecksetzen);
                         pausiert = true;
-                        "pausiert".to_string()
+                        tr(T::Pausiert).to_string()
                     }
                     "status" => {
                         let server = Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_else(|| "–".into());
-                        format!(
-                            "Zustand: {} · Verbindung: {verbindung} · Bausteine: {} · Server: {server}",
-                            if pausiert || greifen_ausstehend { "pausiert" } else { "aktiv" },
-                            engine.anzahl()
-                        )
+                        let zustand = tr(if pausiert || greifen_ausstehend { T::Pausiert } else { T::Aktiv });
+                        i18n::f(i18n::aktuell(), T::StatusZeile, &[&zustand, &verbindung, &engine.anzahl(), &server])
                     }
                     _ => "unbekannter Befehl".to_string(),
                 };

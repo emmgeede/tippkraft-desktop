@@ -1,5 +1,6 @@
 //! Tray-Icon (F13): StatusNotifierItem über ksni, Icon wird zur Laufzeit gezeichnet.
 
+use crate::i18n::{Sprache, T, f, text};
 use crate::sync::Verbindung;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -8,20 +9,25 @@ pub struct TrayZustand {
     pub verbindung: Verbindung,
     pub anzahl: usize,
     pub server: String,
+    pub sprache: Sprache,
 }
 
-fn verbindung_kurz(v: Verbindung) -> &'static str {
-    match v {
-        Verbindung::Verbunden => "verbunden",
-        Verbindung::Offline => "offline",
-        Verbindung::TokenUngueltig => "Token ungültig",
-        Verbindung::NichtAngemeldet => "nicht verbunden",
-        Verbindung::ServerNeuer => "Server neuer, bitte aktualisieren",
-    }
+fn verbindung_kurz(s: Sprache, v: Verbindung) -> &'static str {
+    text(
+        s,
+        match v {
+            Verbindung::Verbunden => T::KurzVerbunden,
+            Verbindung::Offline => T::KurzOffline,
+            Verbindung::TokenUngueltig => T::KurzTokenUngueltig,
+            Verbindung::NichtAngemeldet => T::KurzNichtVerbunden,
+            Verbindung::ServerNeuer => T::KurzServerNeuer,
+        },
+    )
 }
 
 pub fn statuszeile(z: &TrayZustand) -> String {
-    format!("{} · {} · {} Bausteine", if z.pausiert { "Pausiert" } else { "Aktiv" }, verbindung_kurz(z.verbindung), z.anzahl)
+    let s = z.sprache;
+    format!("{} · {} · {}", text(s, if z.pausiert { T::TrayPausiert } else { T::TrayAktiv }), verbindung_kurz(s, z.verbindung), f(s, T::TrayBausteine, &[&z.anzahl]))
 }
 
 fn warnung(z: &TrayZustand) -> bool {
@@ -116,20 +122,25 @@ impl ksni::Tray for Tray {
     fn activate(&mut self, _x: i32, _y: i32) {
         (self.senden)(TrayAktion::Pause);
     }
+    /// Mittelklick öffnet die Übersicht (F15 Q6)
+    fn secondary_activate(&mut self, _x: i32, _y: i32) {
+        (self.senden)(TrayAktion::Uebersicht);
+    }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::StandardItem;
         let eintrag = |label: &str, aktion: TrayAktion| -> ksni::MenuItem<Self> {
             StandardItem { label: label.into(), activate: Box::new(move |t: &mut Self| (t.senden)(aktion)), ..Default::default() }.into()
         };
+        let s = self.zustand.sprache;
         vec![
             StandardItem { label: statuszeile(&self.zustand), enabled: false, ..Default::default() }.into(),
             ksni::MenuItem::Separator,
-            eintrag(if self.zustand.pausiert { "Fortsetzen" } else { "Pausieren" }, TrayAktion::Pause),
-            eintrag("Bausteine anzeigen", TrayAktion::Uebersicht),
-            eintrag("Webtool öffnen", TrayAktion::Webtool),
-            eintrag("Neu verbinden …", TrayAktion::Verbinden),
+            eintrag(text(s, if self.zustand.pausiert { T::TrayFortsetzen } else { T::TrayPausieren }), TrayAktion::Pause),
+            eintrag(text(s, T::TrayUebersicht), TrayAktion::Uebersicht),
+            eintrag(text(s, T::TrayWebtool), TrayAktion::Webtool),
+            eintrag(text(s, T::TrayNeuVerbinden), TrayAktion::Verbinden),
             ksni::MenuItem::Separator,
-            eintrag("Beenden", TrayAktion::Beenden),
+            eintrag(text(s, T::TrayBeenden), TrayAktion::Beenden),
         ]
     }
 }
@@ -139,7 +150,7 @@ mod tests {
     use super::*;
 
     fn z(pausiert: bool, verbindung: Verbindung) -> TrayZustand {
-        TrayZustand { pausiert, verbindung, anzahl: 3, server: "http://localhost:4321".into() }
+        TrayZustand { pausiert, verbindung, anzahl: 3, server: "http://localhost:4321".into(), sprache: Sprache::De }
     }
 
     /// ARGB eines Pixels
@@ -153,6 +164,8 @@ mod tests {
         assert_eq!(statuszeile(&z(false, Verbindung::Verbunden)), "Aktiv · verbunden · 3 Bausteine");
         assert_eq!(statuszeile(&z(true, Verbindung::Offline)), "Pausiert · offline · 3 Bausteine");
         assert_eq!(statuszeile(&z(false, Verbindung::NichtAngemeldet)), "Aktiv · nicht verbunden · 3 Bausteine");
+        let en = TrayZustand { sprache: Sprache::En, ..z(true, Verbindung::TokenUngueltig) };
+        assert_eq!(statuszeile(&en), "Paused · token invalid · 3 snippets");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Baustein-Übersicht (F14): eigener Prozess `tippkraft uebersicht`, liest stand.json, nur Anzeige und Filter.
 
 use crate::format::{Ausloeser, Stand};
+use crate::i18n::{Sprache, T, text, tr};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Eintrag {
@@ -13,13 +14,16 @@ pub struct Eintrag {
     suchtext: String,
 }
 
-fn ausloeser_name(a: Ausloeser) -> &'static str {
-    match a {
-        Ausloeser::Sofort => "Sofort",
-        Ausloeser::Leertaste => "Leertaste",
-        Ausloeser::Enter => "Enter",
-        Ausloeser::Tab => "Tab",
-    }
+fn ausloeser_name(s: Sprache, a: Ausloeser) -> &'static str {
+    text(
+        s,
+        match a {
+            Ausloeser::Sofort => T::AuslSofort,
+            Ausloeser::Leertaste => T::AuslLeertaste,
+            Ausloeser::Enter => T::AuslEnter,
+            Ausloeser::Tab => T::AuslTab,
+        },
+    )
 }
 
 /// Kurzer Hinweis wie im Webtool (`auszug` in web/src/lib/bausteine.ts): eine Zeile, höchstens 80 Zeichen
@@ -29,13 +33,13 @@ fn vorschau(inhalt: &str) -> String {
 }
 
 /// Aktive zuerst, dann deaktivierte, jeweils alphabetisch
-pub fn eintraege(stand: &Stand) -> Vec<Eintrag> {
+pub fn eintraege(stand: &Stand, s: Sprache) -> Vec<Eintrag> {
     let mut e: Vec<Eintrag> = stand
         .bausteine
         .iter()
         .map(|b| Eintrag {
             kuerzel: b.kuerzel.clone(),
-            ausloeser: ausloeser_name(b.ausloeser),
+            ausloeser: ausloeser_name(s, b.ausloeser),
             bezeichnung: b.bezeichnung.clone(),
             vorschau: vorschau(&b.inhalt),
             aktiv: b.aktiv,
@@ -79,23 +83,24 @@ impl eframe::App for App {
         let rand = egui::Frame::new().fill(f.bg).inner_margin(egui::Margin::same(20));
         egui::CentralPanel::default().frame(rand).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Bausteine").size(18.0));
+                ui.label(RichText::new(tr(T::UebTitel)).size(18.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let n = self.eintraege.len();
-                    let text = if self.suche.trim().is_empty() { format!("{n} Bausteine") } else { format!("{} von {n}", treffer.len()) };
+                    let sp = crate::i18n::aktuell();
+                    let text = if self.suche.trim().is_empty() { crate::i18n::f(sp, T::UebAnzahl, &[&n]) } else { crate::i18n::f(sp, T::UebVonN, &[&treffer.len(), &n]) };
                     ui.label(RichText::new(text).color(f.muted).size(13.0));
                 });
             });
             ui.add_space(8.0);
             // Suchfeld behält immer den Fokus: Es ist das einzige bedienbare Element
-            let r = ui.add(egui::TextEdit::singleline(&mut self.suche).hint_text("Suchen …").desired_width(f32::INFINITY).margin(egui::vec2(10.0, 8.0)));
+            let r = ui.add(egui::TextEdit::singleline(&mut self.suche).hint_text(tr(T::UebSuchen)).desired_width(f32::INFINITY).margin(egui::vec2(10.0, 8.0)));
             if !r.has_focus() {
                 r.request_focus();
             }
             ui.add_space(10.0);
 
             if self.eintraege.is_empty() {
-                ui.label(RichText::new("Noch keine Bausteine. Verbinde tippkraft über „tippkraft verbinden“.").color(f.muted));
+                ui.label(RichText::new(tr(T::UebLeer)).color(f.muted));
                 return;
             }
             let aus = egui::ScrollArea::vertical().auto_shrink(false).vertical_scroll_offset(self.scroll).show(ui, |ui| {
@@ -111,7 +116,7 @@ impl eframe::App for App {
                                 ui.label(RichText::new(bz).color(text_farbe));
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let tag = if e.aktiv { e.ausloeser.to_string() } else { "löst nicht aus".to_string() };
+                                let tag = if e.aktiv { e.ausloeser.to_string() } else { tr(T::UebLoestNicht).to_string() };
                                 ui.label(RichText::new(tag).color(f.muted).size(12.5));
                             });
                         });
@@ -122,7 +127,7 @@ impl eframe::App for App {
                     ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, f.border));
                 }
                 if treffer.is_empty() {
-                    ui.label(RichText::new("Keine Treffer.").color(f.muted));
+                    ui.label(RichText::new(tr(T::UebKeineTreffer)).color(f.muted));
                 }
             });
             self.scroll = aus.state.clamped_offset().y;
@@ -136,7 +141,7 @@ pub fn zeigen(stand: Stand, sperrdatei: &std::path::Path) -> Result<(), String> 
     if rustix::fs::flock(&datei, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
         return Ok(());
     }
-    let app = App { eintraege: eintraege(&stand), suche: String::new(), scroll: 0.0 };
+    let app = App { eintraege: eintraege(&stand, crate::i18n::aktuell()), suche: String::new(), scroll: 0.0 };
     let optionen = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_app_id(crate::engine::UEBERSICHT_APP_ID).with_title("tippkraft · Bausteine").with_inner_size([640.0, 560.0]),
         ..Default::default()
@@ -157,6 +162,10 @@ mod tests {
     use super::*;
     use crate::format::Baustein;
 
+    fn eintraege_de(s: &Stand) -> Vec<Eintrag> {
+        eintraege(s, Sprache::De)
+    }
+
     fn b(kuerzel: &str, inhalt: &str, bezeichnung: Option<&str>, aktiv: bool) -> Baustein {
         Baustein {
             kuerzel: kuerzel.into(),
@@ -172,22 +181,23 @@ mod tests {
 
     #[test]
     fn aktive_zuerst_dann_deaktivierte_f14_ac4() {
-        let stand = Stand { version: 2, bausteine: vec![b("alt", "x", None, false), b("Mfg", "y", None, true), b("adr", "z", Some("Adresse"), true)], ausschluesse: vec![] };
-        let e = eintraege(&stand);
+        let stand = Stand { sprache: None, version: 2, bausteine: vec![b("alt", "x", None, false), b("Mfg", "y", None, true), b("adr", "z", Some("Adresse"), true)], ausschluesse: vec![] };
+        let e = eintraege(&stand, Sprache::De);
         assert_eq!(e.iter().map(|x| (x.kuerzel.as_str(), x.aktiv)).collect::<Vec<_>>(), [("adr", true), ("Mfg", true), ("alt", false)]);
         assert_eq!(e[0].ausloeser, "Leertaste");
     }
 
     #[test]
     fn nur_einzeiliger_auszug_wie_im_webtool() {
-        let e = eintraege(&Stand { version: 2, bausteine: vec![b("a", "eins\n\n  zwei\ndrei", None, true), b("l", &"x".repeat(20_000), None, true)], ausschluesse: vec![] });
+        let e = eintraege_de(&Stand { sprache: None, version: 2, bausteine: vec![b("a", "eins\n\n  zwei\ndrei", None, true), b("l", &"x".repeat(20_000), None, true)], ausschluesse: vec![] });
         assert_eq!(e[0].vorschau, "eins zwei drei");
         assert_eq!(e[1].vorschau, format!("{}…", "x".repeat(80)));
     }
 
     #[test]
     fn filter_ueber_kuerzel_bezeichnung_inhalt_f14_ac5() {
-        let e = eintraege(&Stand {
+        let e = eintraege_de(&Stand {
+            sprache: None,
             version: 2,
             bausteine: vec![b("mfg", "Mit freundlichen Grüßen", None, true), b("adr", "Musterstraße", Some("Adresse"), true), b("sig", "Viele GRÜSSE", None, false)],
             ausschluesse: vec![],

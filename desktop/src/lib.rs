@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod format;
+pub mod i18n;
 pub mod niri;
 pub mod popup;
 pub mod steuerung;

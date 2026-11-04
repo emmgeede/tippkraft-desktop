@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::POPUP_APP_ID;
+use crate::i18n::{T, tr};
 use crate::format::{Abfrage, Aktion, Taste, abfragen, aktionen, einsetzen};
 
 #[derive(Serialize, Deserialize)]
@@ -186,7 +187,7 @@ impl eframe::App for App {
         let rand = egui::Frame::new().fill(f.bg).inner_margin(egui::Margin::same(20));
         egui::CentralPanel::default().frame(rand).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Baustein").color(f.muted).size(13.0));
+                ui.label(RichText::new(tr(T::PopupBaustein)).color(f.muted).size(13.0));
                 ui.label(RichText::new(&self.anfrage.titel).monospace().color(f.accent).size(15.0));
             });
             ui.add_space(10.0);
@@ -214,7 +215,7 @@ impl eframe::App for App {
                         ui.horizontal_wrapped(|ui| {
                             for (j, o) in optionen.iter().enumerate() {
                                 let gewaehlt = self.f.wahl[i] == j;
-                                let text = if o.is_empty() { "(nichts)" } else { o.as_str() };
+                                let text = if o.is_empty() { tr(T::PopupNichts) } else { o.as_str() };
                                 // Pill-Buttons wie die Gruppen im Webtool: gewählt = Akzentfläche
                                 let knopf = egui::Button::new(RichText::new(text).color(if gewaehlt { egui::Color32::WHITE } else { f.fg }))
                                     .fill(if gewaehlt { f.accent } else { f.bg })
@@ -232,22 +233,22 @@ impl eframe::App for App {
             }
 
             ui.add_space(4.0);
-            ui.label(RichText::new("Vorschau").color(f.muted).size(13.0));
+            ui.label(RichText::new(tr(T::PopupVorschau)).color(f.muted).size(13.0));
             egui::Frame::new().fill(f.flaeche).corner_radius(6).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &self.anfrage.datum)).monospace());
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
-                let primaer = egui::Button::new(RichText::new("Einfügen").color(egui::Color32::WHITE)).fill(f.accent).stroke(egui::Stroke::NONE);
+                let primaer = egui::Button::new(RichText::new(tr(T::PopupEinfuegen)).color(egui::Color32::WHITE)).fill(f.accent).stroke(egui::Stroke::NONE);
                 if ui.add(primaer).clicked() {
                     einfuegen = true;
                 }
-                if ui.add(egui::Button::new("Abbrechen").fill(f.bg)).clicked() {
+                if ui.add(egui::Button::new(tr(T::PopupAbbrechen)).fill(f.bg)).clicked() {
                     abbrechen = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Enter · Tab · Pfeile · Esc").color(f.muted).size(12.5));
+                    ui.label(RichText::new(tr(T::PopupTasten)).color(f.muted).size(12.5));
                 });
             });
         });

@@ -30,6 +30,8 @@ fn umgebung(name: &str) -> Vec<(String, String)> {
         v.push((var.to_string(), d.to_string_lossy().into_owned()));
     }
     v.push(("TIPPKRAFT_KEINE_BENACHRICHTIGUNG".into(), "1".into()));
+    // Die Tests prüfen deutsche Texte (F15: sonst Systemsprache)
+    v.push(("TIPPKRAFT_SPRACHE".into(), "de".into()));
     // Wayland sucht seinen Socket relativ zu XDG_RUNTIME_DIR, deshalb als absoluten Pfad mitgeben
     if let (Ok(r), Ok(w)) = (std::env::var("XDG_RUNTIME_DIR"), std::env::var("WAYLAND_DISPLAY")) {
         v.push(("WAYLAND_DISPLAY".into(), format!("{r}/{w}")));
@@ -268,7 +270,7 @@ fn verbinden_starten(u: &[(String, String)], args: &[&str]) -> (Child, u16, Stri
         .spawn()
         .unwrap();
     let mut out = BufReader::new(kind.stdout.take().unwrap()).lines();
-    let url = out.find_map(|z| z.ok().filter(|z| z.contains("/geraet-verbinden?"))).expect("keine Verbinden-URL");
+    let url = out.find_map(|z| z.ok().filter(|z| z.contains("/connect-device?"))).expect("keine Verbinden-URL");
     std::thread::spawn(move || for _ in out {});
     let q: std::collections::HashMap<String, String> = url.split_once('?').unwrap().1.split('&').map(|p| p.split_once('=').unwrap()).map(|(a, b)| (a.into(), b.into())).collect();
     (kind, q["port"].parse().unwrap(), q["state"].clone(), q["challenge"].clone())
@@ -494,15 +496,16 @@ fn einrichten_installiert_und_aktiviert_ac13() {
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
             .env("TIPPKRAFT_SYSTEMCTL", &fake)
+            .env("TIPPKRAFT_SPRACHE", "de")
             .output()
             .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stdout).contains("Schon verbunden"));
     }
     let start = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-starten.desktop")).unwrap();
-    assert!(start.contains("Name=tippkraft starten") && start.contains("Exec=systemctl --user start tippkraft.service"), "F13 AC-8");
+    assert!(start.contains("Name=Start tippkraft") && start.contains("Name[de]=tippkraft starten") && start.contains("Exec=systemctl --user start tippkraft.service"), "F13 AC-8");
     let starter = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-verbinden.desktop")).unwrap();
-    assert!(starter.contains("Name=tippkraft verbinden") && starter.contains(&format!("Exec={} verbinden", home.join(".local/bin/tippkraft").display())));
+    assert!(starter.contains("Name[de]=tippkraft verbinden") && starter.contains(&format!("Exec={} verbinden", home.join(".local/bin/tippkraft").display())));
     assert!(home.join(".local/bin/tippkraft").exists());
     let unit = std::fs::read_to_string(home.join(".config/systemd/user/tippkraft.service")).unwrap();
     assert!(unit.contains("ExecStart=%h/.local/bin/tippkraft run") && unit.contains("Restart=on-failure") && unit.contains("WantedBy=graphical-session.target"));
@@ -530,6 +533,7 @@ fn einrichten_ohne_verbindung_startet_verbinden_f12_ac16() {
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .env("TIPPKRAFT_SYSTEMCTL", &fake)
+        .env("TIPPKRAFT_SPRACHE", "de")
         .env("TIPPKRAFT_BROWSER", &browser)
         .env("TIPPKRAFT_KEINE_BENACHRICHTIGUNG", "1")
         .stdout(Stdio::null())
@@ -538,7 +542,7 @@ fn einrichten_ohne_verbindung_startet_verbinden_f12_ac16() {
         .unwrap();
     assert!(warten_bis(Duration::from_secs(5), || url_datei.exists()), "einrichten hat den Browser nicht geöffnet");
     let url = std::fs::read_to_string(&url_datei).unwrap();
-    assert!(url.starts_with("https://tippkraft.com/geraet-verbinden?"), "Standard-Server: {url}");
+    assert!(url.starts_with("https://tippkraft.com/connect-device?"), "Standard-Server: {url}");
     let q: std::collections::HashMap<&str, &str> = url.trim().split_once('?').unwrap().1.split('&').map(|p| p.split_once('=').unwrap()).collect();
     rueckruf(q["port"].parse().unwrap(), &format!("/fertig?fehler=abgebrochen&state={}", q["state"]));
     let (code, err) = fertig(kind_take(&mut kind));
@@ -632,4 +636,27 @@ fn tray_meldet_sich_an_und_linksklick_pausiert_f13_ac1_ac4() {
     // Tooltip zeigt die Statuszeile
     let tip = Command::new("busctl").args(["--user", "get-property", &dienst, "/StatusNotifierItem", "org.kde.StatusNotifierItem", "ToolTip"]).output().unwrap();
     assert!(String::from_utf8_lossy(&tip.stdout).contains("Pausiert"), "{}", String::from_utf8_lossy(&tip.stdout));
+}
+
+
+// ---------- F15: Sprache ----------
+
+#[test]
+fn sprache_aus_dem_stand_f15_ac4_ac8() {
+    // Stand sagt Englisch, obwohl die Umgebung Deutsch vorgibt: Der Account gewinnt
+    let stand = r#"{"version":2,"sprache":"en","bausteine":[],"ausschluesse":[]}"#;
+    let mut l = starten_mit("sprache-en", &[], umgebung("sprache-en"), Some(stand));
+    let s = status(&l);
+    assert!(s.starts_with("State: active · Connection: not connected · Snippets: 0"), "{s}");
+    let (_, out) = cli(&l.umgebung, &["pause"]);
+    assert_eq!(out.trim(), "tippkraft paused");
+    let _ = &mut l;
+    // Hilfe und englische Befehlsnamen
+    let mut u = umgebung("sprache-hilfe");
+    u.retain(|(k, _)| k != "TIPPKRAFT_SPRACHE");
+    u.push(("TIPPKRAFT_SPRACHE".into(), "en".into()));
+    let (_, hilfe) = cli(&u, &[]);
+    assert!(hilfe.contains("tippkraft connect") && hilfe.contains("Emergency stop"), "{hilfe}");
+    let (code, out) = cli(&u, &["status"]);
+    assert_eq!((code, out.trim()), (1, "tippkraft: tippkraft is not running"));
 }

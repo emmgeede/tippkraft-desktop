@@ -31,6 +31,9 @@ pub struct Baustein {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Stand {
     pub version: u32,
+    /// Sprache des Accounts (F15), fehlt bei älteren Servern
+    #[serde(default)]
+    pub sprache: Option<String>,
     pub bausteine: Vec<Baustein>,
     pub ausschluesse: Vec<String>,
 }
@@ -191,7 +194,7 @@ pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>
         .into_iter()
         .map(|s| match s {
             Stueck::Text(t) => t.to_string(),
-            Stueck::Klammer("=datum") => datum.to_string(),
+            Stueck::Klammer("=date" | "=datum") => datum.to_string(),
             Stueck::Klammer(k) => match k.strip_prefix('?') {
                 Some(rest) => werte.get(rest.split(':').next().unwrap_or_default()).map(|w| w.replace("[[", "[[[[")).unwrap_or_default(),
                 None => format!("{{{{{k}}}}}"),

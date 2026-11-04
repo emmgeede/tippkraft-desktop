@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::format::{self, Stand};
+use crate::i18n::{T, f, tr};
 
 /// Wo tippkraft seine Dateien ablegt (XDG, für Tests per Umgebung umlenkbar)
 pub struct Pfade {
@@ -61,13 +62,13 @@ pub fn privat_schreiben(pfad: &Path, inhalt: &[u8]) -> std::io::Result<()> {
 /// Normalisiert die Server-URL. http nur für localhost, sonst ginge der Token unverschlüsselt übers Netz.
 pub fn server_url(url: &str) -> Result<String, String> {
     let url = url.trim().trim_end_matches('/');
-    let (schema, rest) = url.split_once("://").ok_or("URL braucht http:// oder https://")?;
+    let (schema, rest) = url.split_once("://").ok_or(tr(T::UrlSchema))?;
     let host = rest.split(['/', ':']).next().unwrap_or_default();
     match schema {
         "https" if !host.is_empty() => Ok(url.to_string()),
         "http" if host == "localhost" || host == "127.0.0.1" => Ok(url.to_string()),
-        "http" => Err("Bitte https verwenden, sonst geht der Token unverschlüsselt übers Netz".into()),
-        _ => Err("URL braucht http:// oder https://".into()),
+        "http" => Err(tr(T::BitteHttps).into()),
+        _ => Err(tr(T::UrlSchema).into()),
     }
 }
 
@@ -109,13 +110,13 @@ pub enum Verbindung {
 
 impl std::fmt::Display for Verbindung {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Verbindung::NichtAngemeldet => "nicht angemeldet",
-            Verbindung::Verbunden => "verbunden",
-            Verbindung::Offline => "offline, versuche es weiter",
-            Verbindung::TokenUngueltig => "Token ungültig, bitte neu anmelden",
-            Verbindung::ServerNeuer => "Server neuer als tippkraft, bitte aktualisieren",
-        })
+        f.write_str(tr(match self {
+            Verbindung::NichtAngemeldet => T::VerbNichtAngemeldet,
+            Verbindung::Verbunden => T::VerbVerbunden,
+            Verbindung::Offline => T::VerbOffline,
+            Verbindung::TokenUngueltig => T::VerbTokenUngueltig,
+            Verbindung::ServerNeuer => T::VerbServerNeuer,
+        }))
     }
 }
 
@@ -140,8 +141,8 @@ fn anfrage(z: &Zugang, pfad: &str, body_timeout: Option<Duration>) -> Result<ure
 /// Prüft den Token am Server, speichert dann Zugang und Stand. Liefert die Anzahl Bausteine.
 pub fn zugang_speichern(pfade: &Pfade, z: &Zugang) -> Result<usize, String> {
     let mut res = anfrage(z, "/api/sync/snapshot", Some(Duration::from_secs(30))).map_err(|e| match e {
-        Fehler::TokenUngueltig => "Token ungültig oder widerrufen".to_string(),
-        Fehler::Netz(e) => format!("Server nicht erreichbar: {e}"),
+        Fehler::TokenUngueltig => tr(T::TokenWiderrufen).to_string(),
+        Fehler::Netz(e) => f(crate::i18n::aktuell(), T::ServerNichtErreichbar, &[&e]),
     })?;
     let json = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
     let stand = format::parse(&json)?;
@@ -206,7 +207,7 @@ fn url_dekodieren(s: &str) -> String {
 }
 
 pub fn verbinden_url(server: &str, port: u16, state: &str, challenge: &str, name: &str) -> String {
-    format!("{server}/geraet-verbinden?port={port}&state={}&challenge={}&name={}", url_kodieren(state), url_kodieren(challenge), url_kodieren(name))
+    format!("{server}/connect-device?port={port}&state={}&challenge={}&name={}", url_kodieren(state), url_kodieren(challenge), url_kodieren(name))
 }
 
 pub fn rechnername() -> String {
@@ -261,7 +262,7 @@ fn code_einloesen(server: &str, code: &str, verifier: &str) -> Result<String, St
         .post(format!("{server}/api/sync/token"))
         .header("content-type", "application/json")
         .send(serde_json::json!({ "code": code, "verifier": verifier }).to_string())
-        .map_err(|e| format!("Server nicht erreichbar: {e}"))?;
+        .map_err(|e| f(crate::i18n::aktuell(), T::ServerNichtErreichbar, &[&e]))?;
     let text = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
     if res.status() != 200 {
         let msg = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v["error"].as_str().map(String::from));
@@ -279,7 +280,7 @@ pub fn verbinden(pfade: &Pfade, server: Option<&str>, browser: &str) -> Result<(
     let state = zufall();
     let (verifier, ch) = pkce();
     let url = verbinden_url(&server, port, &state, &ch, &rechnername());
-    println!("Browser öffnet sich. Falls nicht, diese Adresse öffnen:\n{url}");
+    println!("{}\n{url}", tr(T::BrowserOeffnet));
     let _ = std::process::Command::new(browser).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
 
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -296,22 +297,22 @@ pub fn verbinden(pfade: &Pfade, server: Option<&str>, browser: &str) -> Result<(
             continue;
         }
         match rueckruf(zeile.trim_end(), &state) {
-            Rueckruf::Fremd => antworten(&s, "400 Bad Request", "Unbekannte Anfrage."),
+            Rueckruf::Fremd => antworten(&s, "400 Bad Request", tr(T::SeiteUnbekannt)),
             Rueckruf::Abgebrochen => {
-                antworten(&s, "200 OK", "Verbinden abgebrochen. Du kannst dieses Fenster schließen.");
-                return Err("Verbinden abgebrochen".into());
+                antworten(&s, "200 OK", tr(T::SeiteAbgebrochen));
+                return Err(tr(T::VerbindenAbgebrochen).into());
             }
             Rueckruf::Code(code) => {
                 let ergebnis = code_einloesen(&server, &code, &verifier).and_then(|token| zugang_speichern(pfade, &Zugang { server: server.clone(), token }));
                 match &ergebnis {
-                    Ok(_) => antworten(&s, "200 OK", "Verbunden. Du kannst dieses Fenster schließen."),
-                    Err(e) => antworten(&s, "200 OK", &format!("Verbinden fehlgeschlagen: {e}")),
+                    Ok(_) => antworten(&s, "200 OK", tr(T::SeiteVerbunden)),
+                    Err(e) => antworten(&s, "200 OK", &f(crate::i18n::aktuell(), T::SeiteFehler, &[e])),
                 }
                 return ergebnis.map(|n| (server, n));
             }
         }
     }
-    Err("Keine Rückmeldung vom Browser innerhalb von 5 Minuten".into())
+    Err(tr(T::KeineRueckmeldung).into())
 }
 
 pub enum Meldung {
@@ -439,7 +440,7 @@ mod tests {
     fn verbinden_url_kodiert_den_namen() {
         assert_eq!(
             verbinden_url("http://localhost:4321", 45123, "S", "C", "mein rechner/ä"),
-            "http://localhost:4321/geraet-verbinden?port=45123&state=S&challenge=C&name=mein%20rechner%2F%C3%A4"
+            "http://localhost:4321/connect-device?port=45123&state=S&challenge=C&name=mein%20rechner%2F%C3%A4"
         );
     }
 

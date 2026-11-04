@@ -211,8 +211,13 @@ pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String
     akt
 }
 
+/// Heutiges Datum im Format der aktuellen Sprache (F15): DE TT.MM.JJJJ, EN JJJJ-MM-TT
 fn heute() -> String {
-    chrono::Local::now().format("%d.%m.%Y").to_string()
+    datum_formatieren(chrono::Local::now().date_naive(), crate::i18n::aktuell())
+}
+
+pub fn datum_formatieren(d: chrono::NaiveDate, s: crate::i18n::Sprache) -> String {
+    d.format(if s == crate::i18n::Sprache::De { "%d.%m.%Y" } else { "%Y-%m-%d" }).to_string()
 }
 
 /// Großer Anfangsbuchstabe, aber nicht komplett groß (bei mehr als einem Buchstaben)
@@ -241,7 +246,7 @@ mod tests {
     }
 
     fn engine(bausteine: Vec<Baustein>) -> Engine {
-        Engine::new(Stand { version: 1, bausteine, ausschluesse: vec!["org.keepassxc.KeePassXC".into()] })
+        Engine::new(Stand { sprache: None, version: 1, bausteine, ausschluesse: vec!["org.keepassxc.KeePassXC".into()] })
     }
 
     /// Tippt einen Text Zeichen für Zeichen (' ' als Leertaste) und liefert die Entscheidungen
@@ -404,7 +409,7 @@ mod tests {
     #[test]
     fn neuer_stand_ersetzt_bausteine() {
         let mut e = engine(vec![]);
-        e.stand(Stand { version: 1, bausteine: vec![b("mfg", "x", Ausloeser::Leertaste)], ausschluesse: vec![] });
+        e.stand(Stand { sprache: None, version: 1, bausteine: vec![b("mfg", "x", Ausloeser::Leertaste)], ausschluesse: vec![] });
         assert_eq!(tippe(&mut e, "mfg ").last(), Some(&ersetzt(3, "x")));
     }
 
@@ -458,5 +463,15 @@ mod tests {
         let mut e = engine(vec![b("mfg", "x", Ausloeser::Leertaste)]);
         e.fokus(Some(UEBERSICHT_APP_ID));
         assert_eq!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen));
+    }
+
+    #[test]
+    fn datumsformat_nach_sprache_f15_ac9() {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap();
+        assert_eq!(datum_formatieren(d, crate::i18n::Sprache::De), "04.11.2026");
+        assert_eq!(datum_formatieren(d, crate::i18n::Sprache::En), "2026-11-04");
+        let mut e = engine(vec![b("dat", "{{=date}} / {{=datum}}", Ausloeser::Leertaste)]);
+        e.datum_fest("2026-11-04");
+        assert_eq!(tippe(&mut e, "dat ").last(), Some(&ersetzt(3, "2026-11-04 / 2026-11-04")));
     }
 }
