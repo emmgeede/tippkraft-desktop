@@ -125,9 +125,17 @@ fn stand_laden(pfad: &PathBuf) -> Stand {
     }
 }
 
+/// Übernommen werden nur reine Tastaturen. Mäuse mit Tasten (z. B. MX Master) haben Achsen,
+/// deren Bewegungen die Weitergabe nicht durchreicht, sie würden sonst einfrieren.
+fn tastatur_ohne_achsen(name: Option<&str>, keys: Option<&evdev::AttributeSetRef<KeyCode>>, hat_achsen: bool) -> bool {
+    name != Some(WEITERGABE_NAME)
+        && !hat_achsen
+        && keys.is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z) && k.contains(KeyCode::KEY_ENTER))
+}
+
 fn ist_tastatur(d: &Device) -> bool {
-    d.name() != Some(WEITERGABE_NAME)
-        && d.supported_keys().is_some_and(|k| k.contains(KeyCode::KEY_A) && k.contains(KeyCode::KEY_Z) && k.contains(KeyCode::KEY_ENTER))
+    let achsen = d.supported_relative_axes().is_some_and(|r| r.iter().next().is_some()) || d.supported_absolute_axes().is_some_and(|a| a.iter().next().is_some());
+    tastatur_ohne_achsen(d.name(), d.supported_keys(), achsen)
 }
 
 fn ist_zeiger(d: &Device) -> bool {
@@ -486,5 +494,28 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys(ks: &[KeyCode]) -> AttributeSet<KeyCode> {
+        let mut a = AttributeSet::new();
+        for k in ks {
+            a.insert(*k);
+        }
+        a
+    }
+
+    #[test]
+    fn maeuse_mit_tasten_werden_nicht_uebernommen() {
+        let tastatur = keys(&[KeyCode::KEY_A, KeyCode::KEY_Z, KeyCode::KEY_ENTER]);
+        assert!(tastatur_ohne_achsen(Some("Keychron K2"), Some(&tastatur), false));
+        // MX Master 3 und Keychron-Zweitschnittstelle: Tasten A–Z plus Maus-/Absolutachsen
+        assert!(!tastatur_ohne_achsen(Some("Logitech MX Master 3 for Mac"), Some(&tastatur), true));
+        assert!(!tastatur_ohne_achsen(Some(WEITERGABE_NAME), Some(&tastatur), false));
+        assert!(!tastatur_ohne_achsen(Some("Power Button"), Some(&keys(&[KeyCode::KEY_POWER])), false));
     }
 }
