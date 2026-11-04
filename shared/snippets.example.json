@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "bausteine": [
+    {
+      "kuerzel": ";sig",
+      "inhalt": "Viele Grüße\nMax Mustermann",
+      "ausloeser": "sofort",
+      "wortgrenze": false,
+      "grossKleinBeachten": false,
+      "schreibweiseUebernehmen": false
+    },
+    {
+      "kuerzel": "adr",
+      "inhalt": "Musterstraße 1[[Tab]]12345 Musterstadt[[Enter:2]]",
+      "ausloeser": "tab",
+      "wortgrenze": true,
+      "grossKleinBeachten": true,
+      "schreibweiseUebernehmen": true
+    },
+    {
+      "kuerzel": "mfg",
+      "inhalt": "Mit freundlichen Grüßen 🙂 [[[[kein Token]]",
+      "ausloeser": "leertaste",
+      "wortgrenze": true,
+      "grossKleinBeachten": false,
+      "schreibweiseUebernehmen": true
+    }
+  ],
+  "ausschluesse": ["1password", "org.keepassxc.KeePassXC"]
+}
