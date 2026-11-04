@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "sprache": "en",
   "bausteine": [
     {
       "kuerzel": ";sig",

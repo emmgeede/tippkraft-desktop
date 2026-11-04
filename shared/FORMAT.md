@@ -9,6 +9,7 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `version` | Zahl | Formatversion, aktuell `2`. Der Desktop liest 1 und 2 und lehnt unbekannte ab (behält dann seinen letzten Stand) |
+| `sprache` | `"en"` \| `"de"` | Ab F15 (Version 2, optional). Sprache des Accounts für Tray, Popup, Übersicht, Meldungen und Datumsformat. Fehlt sie, gilt die Systemsprache |
 | `bausteine` | Liste | Alle Bausteine des Nutzers, sortiert nach `lower(kuerzel)` in Zeichencode-Reihenfolge. Auslösen dürfen nur die mit `aktiv: true` |
 | `bausteine[].aktiv` | bool | Ab Version 2. `true`: Baustein aktiv und Gruppe aktiv oder keine. Fehlt (Version 1): `true` |
 | `bausteine[].bezeichnung` | Text oder `null` | Ab Version 2, für die Übersicht (F14). Fehlt (Version 1): `null` |
@@ -32,6 +33,6 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 Der Desktop füllt sie beim Auslösen aus, der Server prüft nur die Syntax:
 
 - `{{?Name}}`: Textfeld im Popup. `{{?Name:a|b|…}}`: Auswahl (2 bis 20 Optionen, leere Option erlaubt). Gleicher Name wird einmal abgefragt.
-- `{{=datum}}`: heutiges Datum `TT.MM.JJJJ`, ohne Popup.
+- `{{=date}}` (oder `{{=datum}}`): heutiges Datum ohne Popup, bei `sprache: de` als `TT.MM.JJJJ`, sonst ISO `JJJJ-MM-TT`.
 - `{{{{` steht für ein wörtliches `{{`. Der Server gibt es unverändert weiter, auch aus eingebundenen Bausteinen.
 - Reihenfolge auf dem Desktop: Platzhalter und `{{{{` ersetzen (eingegebene Werte mit `[[` werden zu `[[[[` maskiert), danach Tasten-Tokens auswerten.
