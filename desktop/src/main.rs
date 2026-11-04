@@ -38,6 +38,7 @@ enum Ereignis {
     Sync(sync::Meldung),
     Steuerung(String, Sender<String>),
     /// Popup geschlossen: Werte oder `None` bei Abbruch (F8)
+    Tray(tippkraft::tray::TrayAktion),
     PopupFertig { werte: Option<std::collections::HashMap<String, String>>, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion> },
 }
 
@@ -170,6 +171,9 @@ fn einrichten() -> Result<(), String> {
             return Err(format!("systemctl {} fehlgeschlagen", args.join(" ")));
         }
     }
+    let starter_start = home.join(".local/share/applications/tippkraft-starten.desktop");
+    std::fs::create_dir_all(starter_start.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&starter_start, "[Desktop Entry]\nType=Application\nName=tippkraft starten\nComment=Textexpander starten\nExec=systemctl --user start tippkraft.service\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n").map_err(|e| e.to_string())?;
     let starter = home.join(".local/share/applications/tippkraft-verbinden.desktop");
     std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=tippkraft verbinden\nComment=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} verbinden\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
@@ -383,6 +387,20 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
         std::thread::spawn(move || sync::schleife(&pfade, |m| drop(tx.send(Ereignis::Sync(m)))));
     }
 
+    // Tray-Icon (F13). In Tests mit --geraet nur auf ausdrücklichen Wunsch.
+    let tray = if o.geraete.is_empty() || std::env::var_os("TIPPKRAFT_TRAY").is_some() {
+        use ksni::blocking::TrayMethods;
+        let tx = tx.clone();
+        let t = tippkraft::tray::Tray {
+            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new() },
+            senden: Box::new(move |a| drop(tx.send(Ereignis::Tray(a)))),
+        };
+        t.spawn().map_err(|e| eprintln!("tippkraft: kein Tray-Icon ({e})")).ok()
+    } else {
+        None
+    };
+    let mut tray_zustand = None;
+
     // Watchdog: hängt die Hauptschleife, Prozess beenden. Der Kernel gibt die Tastaturen dann frei.
     let herzschlag = Arc::new(AtomicU64::new(jetzt_ms()));
     {
@@ -422,6 +440,18 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             }
             greifen_ausstehend = false;
             pausiert = false;
+        }
+        if let Some(t) = &tray {
+            let z = tippkraft::tray::TrayZustand {
+                pausiert: pausiert || greifen_ausstehend,
+                verbindung,
+                anzahl: engine.anzahl(),
+                server: Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_default(),
+            };
+            if tray_zustand.as_ref() != Some(&z) {
+                t.update(|t| t.zustand = z.clone());
+                tray_zustand = Some(z);
+            }
         }
         if letzte_pruefung.elapsed() > Duration::from_secs(1) {
             letzte_pruefung = Instant::now();
@@ -486,6 +516,41 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                     _ => "unbekannter Befehl".to_string(),
                 };
                 let _ = antwort.send(text);
+                continue;
+            }
+            Ereignis::Tray(aktion) => {
+                use tippkraft::tray::TrayAktion;
+                match aktion {
+                    TrayAktion::Pause => {
+                        // gleicher Weg wie `tippkraft pause`, danach Benachrichtigung
+                        let (atx, arx) = mpsc::channel();
+                        let _ = tx.send(Ereignis::Steuerung("pause".into(), atx));
+                        std::thread::spawn(move || {
+                            if let Ok(a) = arx.recv_timeout(Duration::from_secs(3)) {
+                                benachrichtigen(&format!("tippkraft {a}"));
+                            }
+                        });
+                    }
+                    TrayAktion::Webtool => {
+                        let url = Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_else(|| sync::STANDARD_SERVER.into());
+                        let browser = std::env::var("TIPPKRAFT_BROWSER").unwrap_or_else(|_| "xdg-open".into());
+                        let _ = std::process::Command::new(browser).arg(url).spawn();
+                    }
+                    TrayAktion::Verbinden => {
+                        if let Ok(exe) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe).arg("verbinden").spawn();
+                        }
+                    }
+                    TrayAktion::Beenden => {
+                        if let Some(w) = &mut weitergabe {
+                            for k in weitergegeben.drain() {
+                                let _ = w.emit(&[InputEvent::new(EventType::KEY.0, k.code(), 0)]);
+                            }
+                        }
+                        eprintln!("tippkraft: über das Tray beendet");
+                        std::process::exit(0);
+                    }
+                }
                 continue;
             }
             Ereignis::PopupFertig { werte, loeschen, inhalt, gross, abbruch } => {

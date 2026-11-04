@@ -499,6 +499,8 @@ fn einrichten_installiert_und_aktiviert_ac13() {
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stdout).contains("Schon verbunden"));
     }
+    let start = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-starten.desktop")).unwrap();
+    assert!(start.contains("Name=tippkraft starten") && start.contains("Exec=systemctl --user start tippkraft.service"), "F13 AC-8");
     let starter = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-verbinden.desktop")).unwrap();
     assert!(starter.contains("Name=tippkraft verbinden") && starter.contains(&format!("Exec={} verbinden", home.join(".local/bin/tippkraft").display())));
     assert!(home.join(".local/bin/tippkraft").exists());
@@ -608,4 +610,26 @@ fn popup_abbrechen_tippt_den_ausloeser_nach_f8_ac9() {
     let mut l = starten_mit("popup-ab", &[("TIPPKRAFT_POPUP", &popup)], umgebung("popup-ab"), Some(STAND_BRIEF));
     tippen(&mut l, &[KeyCode::KEY_B, KeyCode::KEY_R, KeyCode::KEY_I, KeyCode::KEY_E, KeyCode::KEY_F, KeyCode::KEY_SPACE]);
     assert_eq!(l.stdout.recv_timeout(Duration::from_secs(3)).unwrap(), r#"ersetzen loeschen=0 [Text(" ")]"#);
+}
+
+
+// ---------- F13: Tray ----------
+
+#[test]
+fn tray_meldet_sich_an_und_linksklick_pausiert_f13_ac1_ac4() {
+    let l = starten("tray", &[("TIPPKRAFT_TRAY", "1")]);
+    let pid = l.kind.id();
+    let name = format!("org.kde.StatusNotifierItem-{pid}-");
+    let gefunden = || {
+        let out = Command::new("busctl").args(["--user", "list", "--no-legend"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().find_map(|z| z.split_whitespace().next().filter(|n| n.starts_with(&name)).map(String::from))
+    };
+    assert!(warten_bis(Duration::from_secs(3), || gefunden().is_some()), "kein StatusNotifierItem auf dem Session-Bus");
+    let dienst = gefunden().unwrap();
+    let out = Command::new("busctl").args(["--user", "call", &dienst, "/StatusNotifierItem", "org.kde.StatusNotifierItem", "Activate", "ii", "0", "0"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(warten_bis(Duration::from_secs(2), || status(&l).contains("pausiert")), "{}", status(&l));
+    // Tooltip zeigt die Statuszeile
+    let tip = Command::new("busctl").args(["--user", "get-property", &dienst, "/StatusNotifierItem", "org.kde.StatusNotifierItem", "ToolTip"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&tip.stdout).contains("Pausiert"), "{}", String::from_utf8_lossy(&tip.stdout));
 }
