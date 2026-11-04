@@ -188,13 +188,27 @@ pub fn abfragen(inhalt: &str) -> Vec<Abfrage> {
     out
 }
 
-/// Setzt Werte und Datum ein und macht aus "{{{{" ein "{{". Werte werden maskiert, damit "[[" darin Text bleibt.
-pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>, datum: &str) -> String {
+/// Werte, die beim Auslösen automatisch eingesetzt werden
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Automatisch {
+    pub datum: String,
+    /// nur gelesen, wenn der Inhalt {{=clipboard}} enthält
+    pub zwischenablage: Option<String>,
+}
+
+/// Markiert {{=cursor}} bis zur Auswertung in `engine::nach_popup` (Zeichen aus dem Private-Use-Bereich)
+pub const CURSOR: char = '\u{E000}';
+
+/// Setzt Werte, Datum, Zwischenablage und Cursor-Markierung ein und macht aus "{{{{" ein "{{".
+/// Werte werden maskiert, damit "[[" darin Text bleibt.
+pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>, auto: &Automatisch) -> String {
     stuecke(inhalt)
         .into_iter()
         .map(|s| match s {
             Stueck::Text(t) => t.to_string(),
-            Stueck::Klammer("=date" | "=datum") => datum.to_string(),
+            Stueck::Klammer("=date" | "=datum") => auto.datum.clone(),
+            Stueck::Klammer("=clipboard") => auto.zwischenablage.as_deref().unwrap_or_default().replace("[[", "[[[["),
+            Stueck::Klammer("=cursor") => CURSOR.to_string(),
             Stueck::Klammer(k) => match k.strip_prefix('?') {
                 Some(rest) => werte.get(rest.split(':').next().unwrap_or_default()).map(|w| w.replace("[[", "[[[[")).unwrap_or_default(),
                 None => format!("{{{{{k}}}}}"),
@@ -277,10 +291,10 @@ mod tests {
     fn einsetzen_ac5_ac7_ac8() {
         let werte = std::collections::HashMap::from([("Name".to_string(), "Muster [[Tab]] {{=datum}}".to_string()), ("Anrede".to_string(), "Frau".to_string())]);
         assert_eq!(
-            einsetzen("{{?Anrede:Herr|Frau}} {{?Name}}, {{=datum}} {{{{?x}} {{?Name}} {{unbekannt}}", &werte, "04.11.2026"),
+            einsetzen("{{?Anrede:Herr|Frau}} {{?Name}}, {{=datum}} {{{{?x}} {{?Name}} {{unbekannt}}", &werte, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None }),
             // Werte werden maskiert: [[ → [[[[, damit sie Text bleiben. {{=datum}} im Wert bleibt Text.
             "Frau Muster [[[[Tab]] {{=datum}}, 04.11.2026 {{?x}} Muster [[[[Tab]] {{=datum}} {{unbekannt}}"
         );
-        assert_eq!(aktionen(&einsetzen("{{?Name}}", &werte, "x")), vec![Aktion::Text("Muster [[Tab]] {{=datum}}".into())]);
+        assert_eq!(aktionen(&einsetzen("{{?Name}}", &werte, &Automatisch::default())), vec![Aktion::Text("Muster [[Tab]] {{=datum}}".into())]);
     }
 }

@@ -1,7 +1,7 @@
 //! Kernlogik: Puffer, Kürzel-Erkennung, Auslöser, Schreibweise, Rückgängig.
 //! Ohne Tastatur und ohne Wayland, damit alles per Unit-Test prüfbar ist.
 
-use crate::format::{Aktion, Ausloeser, Baustein, Stand, Taste, abfragen, aktionen, einsetzen};
+use crate::format::{Aktion, Ausloeser, Automatisch, Baustein, CURSOR, Stand, Taste, abfragen, aktionen, einsetzen};
 
 /// Fenster des Abfrage-Popups. Darin löst tippkraft nie aus (F8).
 pub const POPUP_APP_ID: &str = "tippkraft-popup";
@@ -66,11 +66,12 @@ pub struct Engine {
     letzte: Option<Rueckgaengig>,
     ausgeschlossen: bool,
     festes_datum: Option<String>,
+    feste_zwischenablage: Option<String>,
 }
 
 impl Engine {
     pub fn new(stand: Stand) -> Self {
-        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None };
+        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, feste_zwischenablage: None };
         e.stand(stand);
         e
     }
@@ -97,6 +98,17 @@ impl Engine {
 
     pub fn datum(&self) -> String {
         self.festes_datum.clone().unwrap_or_else(heute)
+    }
+
+    /// Nur für Tests: feste Zwischenablage statt wl-paste
+    pub fn zwischenablage_fest(&mut self, z: &str) {
+        self.feste_zwischenablage = Some(z.into());
+    }
+
+    /// Automatische Werte für diesen Inhalt. Die Zwischenablage wird nur gelesen, wenn sie gebraucht wird.
+    pub fn automatisch(&self, inhalt: &str) -> Automatisch {
+        let zwischenablage = inhalt.contains("{{=clipboard}}").then(|| self.feste_zwischenablage.clone().unwrap_or_else(zwischenablage_lesen));
+        Automatisch { datum: self.datum(), zwischenablage }
     }
 
     pub fn anzahl(&self) -> usize {
@@ -191,7 +203,7 @@ impl Engine {
             };
             return Entscheidung::Popup { titel: getippt, loeschen, inhalt: b.inhalt, gross, abbruch };
         }
-        let akt = nach_popup(&b.inhalt, &Default::default(), &self.datum(), gross);
+        let akt = nach_popup(&b.inhalt, &Default::default(), &self.automatisch(&b.inhalt), gross);
         let nur_text = akt.iter().all(|a| matches!(a, Aktion::Text(_)));
         let eingefuegt = akt.iter().map(|a| if let Aktion::Text(t) = a { t.chars().count() } else { 0 }).sum();
         self.letzte = nur_text.then(|| Rueckgaengig { eingefuegt, wiederherstellen: format!("{getippt}{nachsatz}") });
@@ -199,9 +211,9 @@ impl Engine {
     }
 }
 
-/// Fertige Aktionen: Werte und Datum einsetzen, Tokens auswerten, ggf. ersten Buchstaben großschreiben
-pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String>, datum: &str, gross: bool) -> Vec<Aktion> {
-    let mut akt = aktionen(&einsetzen(inhalt, werte, datum));
+/// Fertige Aktionen: Werte, Datum, Zwischenablage einsetzen, Tokens auswerten, Cursor setzen, ggf. ersten Buchstaben großschreiben
+pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String>, auto: &Automatisch, gross: bool) -> Vec<Aktion> {
+    let mut akt = cursor_anwenden(aktionen(&einsetzen(inhalt, werte, auto)));
     if gross && let Some(Aktion::Text(t)) = akt.iter_mut().find(|a| matches!(a, Aktion::Text(_))) {
         let mut cs = t.chars();
         if let Some(first) = cs.next() {
@@ -212,6 +224,41 @@ pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String
 }
 
 /// Heutiges Datum im Format der aktuellen Sprache (F15): DE TT.MM.JJJJ, EN JJJJ-MM-TT
+/// Entfernt die Cursor-Markierung und hängt so viele "Pfeil links" an, wie Zeichen dahinter stehen.
+/// Folgen dahinter Tasten-Tokens (etwa aus einem Verweis), ist die Position unklar: Cursor ignorieren.
+fn cursor_anwenden(akt: Vec<Aktion>) -> Vec<Aktion> {
+    let Some(i) = akt.iter().position(|a| matches!(a, Aktion::Text(t) if t.contains(CURSOR))) else { return akt };
+    let tasten_danach = akt[i + 1..].iter().any(|a| matches!(a, Aktion::Taste(..)));
+    let mut zeichen_danach: usize = akt[i + 1..].iter().map(|a| if let Aktion::Text(t) = a { t.chars().count() } else { 0 }).sum();
+    if let Aktion::Text(t) = &akt[i] {
+        zeichen_danach += t.split(CURSOR).skip(1).collect::<String>().chars().count();
+    }
+    let mut out: Vec<Aktion> = akt
+        .into_iter()
+        .map(|a| if let Aktion::Text(t) = a { Aktion::Text(t.replace(CURSOR, "")) } else { a })
+        .filter(|a| !matches!(a, Aktion::Text(t) if t.is_empty()))
+        .collect();
+    if !tasten_danach {
+        while zeichen_danach > 0 {
+            let n = zeichen_danach.min(255);
+            out.push(Aktion::Taste(Taste::Left, n as u8));
+            zeichen_danach -= n;
+        }
+    }
+    out
+}
+
+/// Text aus der Wayland-Zwischenablage, leer wenn keiner da ist (höchstens 20 000 Zeichen)
+fn zwischenablage_lesen() -> String {
+    std::process::Command::new("wl-paste")
+        .args(["--no-newline", "--type", "text/plain"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).chars().take(20_000).collect())
+        .unwrap_or_default()
+}
+
 fn heute() -> String {
     datum_formatieren(chrono::Local::now().date_naive(), crate::i18n::aktuell())
 }
@@ -439,8 +486,9 @@ mod tests {
     #[test]
     fn nach_dem_popup_ausfuellen_ac7() {
         let werte = std::collections::HashMap::from([("Anrede".to_string(), "frau".to_string()), ("Name".to_string(), "Muster".to_string())]);
-        assert_eq!(nach_popup("{{?Anrede:Herr|frau}} {{?Name}}, {{=datum}}", &werte, "04.11.2026", true), vec![Aktion::Text("Frau Muster, 04.11.2026".into())]);
-        assert_eq!(nach_popup("{{?Name}}[[Tab]]", &werte, "x", false), vec![Aktion::Text("Muster".into()), Aktion::Taste(Taste::Tab, 1)]);
+        let auto = Automatisch { datum: "04.11.2026".into(), zwischenablage: None };
+        assert_eq!(nach_popup("{{?Anrede:Herr|frau}} {{?Name}}, {{=datum}}", &werte, &auto, true), vec![Aktion::Text("Frau Muster, 04.11.2026".into())]);
+        assert_eq!(nach_popup("{{?Name}}[[Tab]]", &werte, &auto, false), vec![Aktion::Text("Muster".into()), Aktion::Taste(Taste::Tab, 1)]);
     }
 
     #[test]
@@ -473,5 +521,31 @@ mod tests {
         let mut e = engine(vec![b("dat", "{{=date}} / {{=datum}}", Ausloeser::Leertaste)]);
         e.datum_fest("2026-11-04");
         assert_eq!(tippe(&mut e, "dat ").last(), Some(&ersetzt(3, "2026-11-04 / 2026-11-04")));
+    }
+
+    // ---------- F9 ----------
+
+    #[test]
+    fn zwischenablage_als_text_f9_ac1() {
+        let mut e = engine(vec![b("zw", "Von: {{=clipboard}}", Ausloeser::Leertaste)]);
+        e.zwischenablage_fest("Muster [[Tab]]");
+        assert_eq!(tippe(&mut e, "zw ").last(), Some(&ersetzt(2, "Von: Muster [[Tab]]")));
+    }
+
+    #[test]
+    fn cursor_mit_pfeil_links_f9_ac2() {
+        let mut e = engine(vec![b("hi", "Hallo {{=cursor}}, viele Grüße", Ausloeser::Leertaste)]);
+        assert_eq!(
+            tippe(&mut e, "hi ").last(),
+            Some(&Entscheidung::Ersetzen { loeschen: 2, aktionen: vec![Aktion::Text("Hallo , viele Grüße".into()), Aktion::Taste(Taste::Left, 13)] })
+        );
+        // über 255 Zeichen hinweg in mehreren Schritten, Zeilenumbrüche zählen als ein Zeichen
+        let lang = format!("a{{{{=cursor}}}}{}\nb", "x".repeat(300));
+        let akt = nach_popup(&lang, &Default::default(), &Default::default(), false);
+        let links: usize = akt.iter().map(|a| if let Aktion::Taste(Taste::Left, n) = a { *n as usize } else { 0 }).sum();
+        assert_eq!(links, 302);
+        // hinter dem Cursor ein Tasten-Token (z. B. aus einem Verweis): Cursor wird ignoriert
+        let akt = nach_popup("a{{=cursor}}b[[Tab]]", &Default::default(), &Default::default(), false);
+        assert_eq!(akt, vec![Aktion::Text("ab".into()), Aktion::Taste(Taste::Tab, 1)]);
     }
 }

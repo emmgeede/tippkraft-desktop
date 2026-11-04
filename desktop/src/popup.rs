@@ -8,13 +8,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::POPUP_APP_ID;
 use crate::i18n::{T, tr};
-use crate::format::{Abfrage, Aktion, Taste, abfragen, aktionen, einsetzen};
+use crate::format::{Abfrage, Aktion, Automatisch, CURSOR, Taste, abfragen, aktionen, einsetzen};
 
 #[derive(Serialize, Deserialize)]
 pub struct Anfrage {
     pub titel: String,
     pub inhalt: String,
     pub datum: String,
+    /// nur bei {{=clipboard}} (F9)
+    #[serde(default)]
+    pub zwischenablage: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,12 +62,12 @@ impl Formular {
             .collect()
     }
 
-    /// Fertiger Text, Tasten-Tokens als Symbole
-    pub fn vorschau(&self, inhalt: &str, datum: &str) -> String {
-        aktionen(&einsetzen(inhalt, &self.werte(), datum))
+    /// Fertiger Text, Tasten-Tokens als Symbole, Cursorposition als ▏
+    pub fn vorschau(&self, inhalt: &str, auto: &Automatisch) -> String {
+        aktionen(&einsetzen(inhalt, &self.werte(), auto))
             .into_iter()
             .map(|a| match a {
-                Aktion::Text(t) => t,
+                Aktion::Text(t) => t.replace(CURSOR, "▏"),
                 Aktion::Taste(t, n) => {
                     let s = match t {
                         Taste::Tab => "⇥",
@@ -236,7 +239,7 @@ impl eframe::App for App {
             ui.label(RichText::new(tr(T::PopupVorschau)).color(f.muted).size(13.0));
             egui::Frame::new().fill(f.flaeche).corner_radius(6).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &self.anfrage.datum)).monospace());
+                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &Automatisch { datum: self.anfrage.datum.clone(), zwischenablage: self.anfrage.zwischenablage.clone() })).monospace());
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
@@ -303,7 +306,8 @@ mod tests {
         f.waehlen(1); // im Textfeld wirkungslos
         f.texte[1] = "Muster".into();
         assert_eq!(f.werte()["Anrede"], "Frau");
-        assert_eq!(f.vorschau(inhalt, "04.11.2026"), "Frau Muster, 04.11.2026⇥ Muster");
+        assert_eq!(f.vorschau(inhalt, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None }), "Frau Muster, 04.11.2026⇥ Muster");
+        assert_eq!(f.vorschau("a{{=cursor}}b {{=clipboard}}", &Automatisch { datum: String::new(), zwischenablage: Some("Z".into()) }), "a▏b Z");
         f.weiter(false);
         assert_eq!(f.aktiv, 0, "Tab springt vom letzten zum ersten Feld");
         f.weiter(true);

@@ -75,10 +75,10 @@ fn popup() -> Result<(), String> {
 }
 
 /// Startet das Popup als eigenen Prozess, damit die Hauptschleife (Tastenweitergabe, Watchdog) weiterläuft
-fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion>, datum: String) {
+fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion>, auto: tippkraft::format::Automatisch) {
     std::thread::spawn(move || {
         let programm = std::env::var_os("TIPPKRAFT_POPUP").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| "tippkraft".into());
-        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum }).unwrap();
+        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum: auto.datum, zwischenablage: auto.zwischenablage }).unwrap();
         let werte = (|| {
             let mut kind = std::process::Command::new(&programm).arg("popup").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().ok()?;
             std::io::Write::write_all(&mut kind.stdin.take()?, anfrage.as_bytes()).ok()?;
@@ -561,7 +561,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             }
             Ereignis::PopupFertig { werte, loeschen, inhalt, gross, abbruch } => {
                 let (loeschen, aktionen) = match werte {
-                    Some(w) => (loeschen, nach_popup(&inhalt, &w, &engine.datum(), gross)),
+                    Some(w) => (loeschen, nach_popup(&inhalt, &w, &engine.automatisch(&inhalt), gross)),
                     // Abbruch: nichts löschen, nur den zurückgehaltenen Auslöser nachholen
                     None => (0, abbruch),
                 };
@@ -636,7 +636,8 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                     Entscheidung::Durchlassen => weiter(1),
                     Entscheidung::Popup { titel, loeschen, inhalt, gross, abbruch } => {
                         zurueckgehalten.insert(key);
-                        popup_starten(tx.clone(), titel, loeschen, inhalt, gross, abbruch, engine.datum());
+                        let auto = engine.automatisch(&inhalt);
+                        popup_starten(tx.clone(), titel, loeschen, inhalt, gross, abbruch, auto);
                     }
                     Entscheidung::Ersetzen { loeschen, aktionen } => {
                         zurueckgehalten.insert(key);
