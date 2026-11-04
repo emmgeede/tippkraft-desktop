@@ -22,8 +22,8 @@ const WATCHDOG: Duration = Duration::from_secs(2);
 const WEITERGABE_NAME: &str = "tippkraft-weitergabe";
 const HILFE: &str = "tippkraft – Textexpander für Wayland
 
-  tippkraft einrichten            Binärdatei installieren, Autostart einrichten und starten
-  tippkraft login <URL> <Token>   Mit dem Webtool verbinden (Token unter Einstellungen → Desktop-Geräte)
+  tippkraft einrichten            Installieren, Autostart einrichten, starten und mit dem Konto verbinden
+  tippkraft verbinden             Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
   tippkraft status                Zustand anzeigen
   tippkraft pause                 Pausieren bzw. fortsetzen (gibt die Tastatur frei)
   tippkraft run [--verzoegerung MS] [--stand DATEI] [--geraet /dev/input/eventN] [--trocken]
@@ -43,9 +43,8 @@ fn main() {
     let pfade = Pfade::aus_umgebung();
     let ergebnis = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..], pfade),
-        Some("login") if args.len() == 3 => sync::login(&pfade, &args[1], &args[2]).map(|n| {
-            println!("Angemeldet bei {}, {n} Bausteine", sync::server_url(&args[1]).unwrap_or_default());
-        }),
+        Some("verbinden") => verbinden(&pfade, &args[1..]),
+        Some("login") => Err(format!("`login` gibt es nicht mehr. Verbinden geht jetzt über den Browser: tippkraft verbinden\n\n{HILFE}")),
         Some("status") => status(&pfade),
         Some("pause") => pause(&pfade),
         Some("einrichten") => einrichten(),
@@ -60,6 +59,34 @@ fn main() {
     }
 }
 
+fn benachrichtigen(text: &str) {
+    if std::env::var_os("TIPPKRAFT_KEINE_BENACHRICHTIGUNG").is_none() {
+        let _ = std::process::Command::new("notify-send").args(["-a", "tippkraft", "-t", "4000", text]).status();
+    }
+}
+
+fn verbinden(pfade: &Pfade, args: &[String]) -> Result<(), String> {
+    let server = match args {
+        [] => None,
+        [o, url] if o == "--server" => Some(url.as_str()),
+        _ => return Err(format!("Aufruf: tippkraft verbinden [--server URL]\n\n{HILFE}")),
+    };
+    let browser = std::env::var("TIPPKRAFT_BROWSER").unwrap_or_else(|_| "xdg-open".into());
+    match sync::verbinden(pfade, server, &browser) {
+        Ok((server, n)) => {
+            let text = format!("Verbunden mit {server}, {n} Bausteine");
+            println!("{text}");
+            benachrichtigen(&format!("tippkraft: {text}"));
+            Ok(())
+        }
+        Err(e) => {
+            // auch sichtbar, wenn über den App-Starter ohne Terminal gestartet
+            benachrichtigen(&format!("tippkraft: {e}"));
+            Err(e)
+        }
+    }
+}
+
 fn status(pfade: &Pfade) -> Result<(), String> {
     let antwort = steuerung::senden(&pfade.socket, "status").ok_or("tippkraft läuft nicht")?;
     println!("{antwort}");
@@ -70,9 +97,7 @@ fn pause(pfade: &Pfade) -> Result<(), String> {
     let antwort = steuerung::senden(&pfade.socket, "pause").ok_or("tippkraft läuft nicht")?;
     let text = format!("tippkraft {antwort}");
     println!("{text}");
-    if std::env::var_os("TIPPKRAFT_KEINE_BENACHRICHTIGUNG").is_none() {
-        let _ = std::process::Command::new("notify-send").args(["-a", "tippkraft", "-t", "2000", &text]).status();
-    }
+    benachrichtigen(&text);
     Ok(())
 }
 
@@ -111,8 +136,16 @@ fn einrichten() -> Result<(), String> {
             return Err(format!("systemctl {} fehlgeschlagen", args.join(" ")));
         }
     }
-    println!("Eingerichtet: {} und tippkraft.service läuft.\nJetzt anmelden: tippkraft login <URL> <Token>", ziel.display());
-    Ok(())
+    let starter = home.join(".local/share/applications/tippkraft-verbinden.desktop");
+    std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=tippkraft verbinden\nComment=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} verbinden\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
+    println!("Eingerichtet: {} und tippkraft.service läuft.", ziel.display());
+    let pfade = Pfade::aus_umgebung();
+    if Zugang::laden(&pfade.zugang).is_some() {
+        println!("Schon verbunden. Neu verbinden: „tippkraft verbinden“ im App-Starter.");
+        return Ok(());
+    }
+    verbinden(&pfade, &[])
 }
 
 fn stand_laden(pfad: &PathBuf) -> Stand {

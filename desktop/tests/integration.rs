@@ -169,6 +169,8 @@ struct Server {
     stand: Arc<Mutex<String>>,
     gueltig: Arc<AtomicBool>,
     streams: Arc<Mutex<Vec<TcpStream>>>,
+    /// challenge aus der Verbinden-URL, gegen die /api/sync/token den verifier prüft
+    challenge: Arc<Mutex<String>>,
 }
 
 impl Server {
@@ -179,6 +181,7 @@ impl Server {
             stand: Arc::new(Mutex::new(stand.into())),
             gueltig: Arc::new(AtomicBool::new(true)),
             streams: Arc::default(),
+            challenge: Arc::default(),
         };
         let srv = s.clone();
         std::thread::spawn(move || {
@@ -200,6 +203,21 @@ impl Server {
             }
         }
         let anfrage = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+        if anfrage.starts_with("post /api/sync/token") {
+            let roh = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let laenge: usize = anfrage.lines().find_map(|l| l.strip_prefix("content-length:")).map(|v| v.trim().parse().unwrap()).unwrap_or(0);
+            let mut body = roh.split_once("\r\n\r\n").unwrap().1.as_bytes().to_vec();
+            while body.len() < laenge {
+                let mut b = [0u8; 1024];
+                let k = c.read(&mut b).unwrap();
+                body.extend_from_slice(&b[..k]);
+            }
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let ok = v["code"] == "CODE1" && tippkraft::sync::challenge(v["verifier"].as_str().unwrap()) == *self.challenge.lock().unwrap();
+            let (status, antwort) = if ok { ("200 OK", r#"{"token":"tk_gut"}"#) } else { ("400 Bad Request", r#"{"error":"Code ungültig oder abgelaufen."}"#) };
+            let _ = c.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{antwort}", antwort.len()).as_bytes());
+            return;
+        }
         if !self.gueltig.load(Ordering::SeqCst) || !anfrage.contains("authorization: bearer tk_gut") {
             let _ = c.write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
             return;
@@ -238,37 +256,102 @@ fn warten_bis(max: Duration, mut f: impl FnMut() -> bool) -> bool {
     false
 }
 
+/// Startet `tippkraft verbinden` ohne echten Browser und liefert (Prozess, Port, state, challenge)
+fn verbinden_starten(u: &[(String, String)], args: &[&str]) -> (Child, u16, String, String) {
+    let mut kind = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
+        .arg("verbinden")
+        .args(args)
+        .envs(u.iter().map(|(a, b)| (a, b)))
+        .env("TIPPKRAFT_BROWSER", "true")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut out = BufReader::new(kind.stdout.take().unwrap()).lines();
+    let url = out.find_map(|z| z.ok().filter(|z| z.contains("/geraet-verbinden?"))).expect("keine Verbinden-URL");
+    std::thread::spawn(move || for _ in out {});
+    let q: std::collections::HashMap<String, String> = url.split_once('?').unwrap().1.split('&').map(|p| p.split_once('=').unwrap()).map(|(a, b)| (a.into(), b.into())).collect();
+    (kind, q["port"].parse().unwrap(), q["state"].clone(), q["challenge"].clone())
+}
+
+/// Ruft den Rückruf-Port wie ein Browser auf und liefert die Statuszeile
+fn rueckruf(port: u16, pfad: &str) -> String {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.write_all(format!("GET {pfad} HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n").as_bytes()).unwrap();
+    let mut antwort = String::new();
+    let _ = s.read_to_string(&mut antwort);
+    antwort
+}
+
+fn fertig(mut kind: Child) -> (i32, String) {
+    let ende = Instant::now() + Duration::from_secs(10);
+    while kind.try_wait().unwrap().is_none() && Instant::now() < ende {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut err = String::new();
+    let _ = kind.stderr.take().unwrap().read_to_string(&mut err);
+    (kind.wait().unwrap().code().unwrap_or(-1), err)
+}
+
 #[test]
-fn login_speichert_privat_ac1_ac4() {
+fn verbinden_ueber_rueckruf_f12_ac13_ac14() {
     use std::os::unix::fs::PermissionsExt;
     let srv = Server::new_mfg();
-    let u = umgebung("login-ok");
-    let (code, out) = cli(&u, &["login", &format!("{}/", srv.url), "tk_gut"]);
-    assert_eq!(code, 0, "{out}");
-    assert_eq!(out.trim(), format!("Angemeldet bei {}, 1 Bausteine", srv.url));
+    let u = umgebung("verbinden");
+    let (kind, port, state, challenge) = verbinden_starten(&u, &["--server", &format!("{}/", srv.url)]);
+    *srv.challenge.lock().unwrap() = challenge;
+    assert!(rueckruf(port, "/favicon.ico").starts_with("HTTP/1.1 400"));
+    assert!(rueckruf(port, "/fertig?code=CODE1&state=falsch").starts_with("HTTP/1.1 400"), "fremder state wird ignoriert");
+    let antwort = rueckruf(port, &format!("/fertig?code=CODE1&state={state}"));
+    assert!(antwort.contains("Verbunden. Du kannst dieses Fenster schließen."), "{antwort}");
+    let (code, err) = fertig(kind);
+    assert_eq!(code, 0, "{err}");
     let config = std::path::PathBuf::from(&u[0].1).join("tippkraft");
     let daten = std::path::PathBuf::from(&u[1].1).join("tippkraft");
     for (datei, modus) in [(config.join("zugang.json"), 0o600), (daten.join("stand.json"), 0o600), (config.clone(), 0o700), (daten.clone(), 0o700)] {
         assert_eq!(std::fs::metadata(&datei).unwrap().permissions().mode() & 0o777, modus, "{}", datei.display());
     }
+    let zugang = std::fs::read_to_string(config.join("zugang.json")).unwrap();
+    assert!(zugang.contains(&srv.url) && zugang.contains("tk_gut") && !zugang.contains(&format!("{}/", srv.url)));
     assert!(std::fs::read_to_string(daten.join("stand.json")).unwrap().contains("mfg"));
-    assert!(std::fs::read_to_string(config.join("zugang.json")).unwrap().contains(&srv.url));
+
+    // F12 AC-15: ohne --server wird die gespeicherte Adresse wiederverwendet
+    let (kind, port, state, challenge) = verbinden_starten(&u, &[]);
+    *srv.challenge.lock().unwrap() = challenge;
+    rueckruf(port, &format!("/fertig?code=CODE1&state={state}"));
+    assert_eq!(fertig(kind).0, 0);
 }
 
 #[test]
-fn login_fehler_speichert_nichts_ac2_ac3() {
+fn verbinden_abgebrochen_oder_falscher_code_f12_ac14() {
     let srv = Server::new_mfg();
-    let u = umgebung("login-fehler");
-    let (code, out) = cli(&u, &["login", &srv.url, "tk_falsch"]);
+    let u = umgebung("verbinden-ab");
+    let (kind, port, state, _) = verbinden_starten(&u, &["--server", &srv.url]);
+    rueckruf(port, &format!("/fertig?fehler=abgebrochen&state={state}"));
+    let (code, err) = fertig(kind);
     assert_ne!(code, 0);
-    assert!(out.contains("Token ungültig"), "{out}");
-    let (code, out) = cli(&u, &["login", "http://127.0.0.1:9", "tk_gut"]);
+    assert!(err.contains("Verbinden abgebrochen"), "{err}");
+
+    // challenge passt nicht zum verifier: Server lehnt ab, nichts gespeichert
+    let (kind, port, state, _) = verbinden_starten(&u, &["--server", &srv.url]);
+    *srv.challenge.lock().unwrap() = "andere".into();
+    assert!(rueckruf(port, &format!("/fertig?code=CODE1&state={state}")).contains("Verbinden fehlgeschlagen"));
+    let (code, err) = fertig(kind);
     assert_ne!(code, 0);
-    assert!(out.contains("nicht erreichbar"), "{out}");
-    let (code, out) = cli(&u, &["login", "http://tippkraft.com", "tk_gut"]);
+    assert!(err.contains("Code ungültig"), "{err}");
+    assert!(!std::path::PathBuf::from(&u[0].1).join("tippkraft/zugang.json").exists());
+
+    // http ohne localhost wird abgelehnt (F6 AC-3)
+    let (code, out) = cli(&u, &["verbinden", "--server", "http://tippkraft.com"]);
     assert_ne!(code, 0);
     assert!(out.contains("https"), "{out}");
-    assert!(!std::path::PathBuf::from(&u[0].1).join("tippkraft/zugang.json").exists());
+}
+
+#[test]
+fn login_gibt_es_nicht_mehr_f12_ac17() {
+    let (code, out) = cli(&umgebung("login-weg"), &["login", "http://localhost:4321", "tk_x"]);
+    assert_ne!(code, 0);
+    assert!(out.contains("tippkraft verbinden"), "{out}");
 }
 
 impl Server {
@@ -277,10 +360,10 @@ impl Server {
     }
 }
 
-/// Angemeldeten Daemon gegen den Testserver starten
+/// Verbundenen Daemon gegen den Testserver starten
 fn angemeldet(name: &str, srv: &Server) -> Lauf {
     let u = umgebung(name);
-    assert_eq!(cli(&u, &["login", &srv.url, "tk_gut"]).0, 0);
+    sync_zugang_schreiben(&u, &srv.url, "tk_gut");
     starten_mit(name, &[], u, None)
 }
 
@@ -332,15 +415,15 @@ fn offline_und_widerrufen_ac6_ac7() {
     assert!(status(&l).contains("Bausteine: 1"));
 
     let u = umgebung("offline");
-    sync_zugang_schreiben(&u, "http://127.0.0.1:9");
+    sync_zugang_schreiben(&u, "http://127.0.0.1:9", "tk_gut");
     let l2 = starten_mit("offline", &[], u, None);
     assert!(warten_bis(Duration::from_secs(3), || status(&l2).contains("offline")), "{}", status(&l2));
 }
 
-fn sync_zugang_schreiben(u: &[(String, String)], server: &str) {
+fn sync_zugang_schreiben(u: &[(String, String)], server: &str, token: &str) {
     let d = std::path::PathBuf::from(&u[0].1).join("tippkraft");
     std::fs::create_dir_all(&d).unwrap();
-    std::fs::write(d.join("zugang.json"), format!(r#"{{"server":"{server}","token":"tk_gut"}}"#)).unwrap();
+    std::fs::write(d.join("zugang.json"), format!(r#"{{"server":"{server}","token":"{token}"}}"#)).unwrap();
 }
 
 #[test]
@@ -401,15 +484,69 @@ fn einrichten_installiert_und_aktiviert_ac13() {
     std::fs::write(&fake, format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display())).unwrap();
     std::os::unix::fs::PermissionsExt::set_mode(&mut std::fs::metadata(&fake).unwrap().permissions(), 0o755);
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // schon verbunden: einrichten startet kein verbinden
+    std::fs::create_dir_all(home.join(".config/tippkraft")).unwrap();
+    std::fs::write(home.join(".config/tippkraft/zugang.json"), r#"{"server":"http://localhost:4321","token":"tk_x"}"#).unwrap();
     for _ in 0..2 {
-        let out = Command::new(env!("CARGO_BIN_EXE_tippkraft")).arg("einrichten").env("HOME", &home).env("TIPPKRAFT_SYSTEMCTL", &fake).output().unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
+            .arg("einrichten")
+            .env("HOME", &home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env("TIPPKRAFT_SYSTEMCTL", &fake)
+            .output()
+            .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).contains("Schon verbunden"));
     }
+    let starter = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-verbinden.desktop")).unwrap();
+    assert!(starter.contains("Name=tippkraft verbinden") && starter.contains(&format!("Exec={} verbinden", home.join(".local/bin/tippkraft").display())));
     assert!(home.join(".local/bin/tippkraft").exists());
     let unit = std::fs::read_to_string(home.join(".config/systemd/user/tippkraft.service")).unwrap();
     assert!(unit.contains("ExecStart=%h/.local/bin/tippkraft run") && unit.contains("Restart=on-failure") && unit.contains("WantedBy=graphical-session.target"));
     let aufrufe = std::fs::read_to_string(log).unwrap();
     assert_eq!(aufrufe.lines().collect::<Vec<_>>(), ["--user daemon-reload", "--user enable tippkraft.service", "--user restart tippkraft.service"].repeat(2));
+}
+
+#[test]
+fn einrichten_ohne_verbindung_startet_verbinden_f12_ac16() {
+    let srv = Server::new_mfg();
+    let home = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("home-einrichten-neu");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let fake = home.join("systemctl");
+    std::fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // Browser-Ersatz merkt sich die URL, der Test bricht dann wie ein Nutzer ab
+    let url_datei = home.join("url");
+    let browser = home.join("browser");
+    std::fs::write(&browser, format!("#!/bin/sh\necho \"$1\" > '{}'\n", url_datei.display())).unwrap();
+    std::fs::set_permissions(&browser, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut kind = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
+        .arg("einrichten")
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env("TIPPKRAFT_SYSTEMCTL", &fake)
+        .env("TIPPKRAFT_BROWSER", &browser)
+        .env("TIPPKRAFT_KEINE_BENACHRICHTIGUNG", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(warten_bis(Duration::from_secs(5), || url_datei.exists()), "einrichten hat den Browser nicht geöffnet");
+    let url = std::fs::read_to_string(&url_datei).unwrap();
+    assert!(url.starts_with("https://tippkraft.com/geraet-verbinden?"), "Standard-Server: {url}");
+    let q: std::collections::HashMap<&str, &str> = url.trim().split_once('?').unwrap().1.split('&').map(|p| p.split_once('=').unwrap()).collect();
+    rueckruf(q["port"].parse().unwrap(), &format!("/fertig?fehler=abgebrochen&state={}", q["state"]));
+    let (code, err) = fertig(kind_take(&mut kind));
+    assert_ne!(code, 0);
+    assert!(err.contains("abgebrochen"), "{err}");
+    let _ = srv;
+}
+
+fn kind_take(k: &mut Child) -> Child {
+    std::mem::replace(k, Command::new("true").spawn().unwrap())
 }
 
 /// Gegen den echten Webserver (Docker), nur mit TIPPKRAFT_ECHT_URL, _TOKEN und _COOKIE:
@@ -421,8 +558,7 @@ fn echter_server() {
     let token = std::env::var("TIPPKRAFT_ECHT_TOKEN").unwrap();
     let cookie = std::env::var("TIPPKRAFT_ECHT_COOKIE").unwrap();
     let u = umgebung("echt");
-    let (code, out) = cli(&u, &["login", &url, &token]);
-    assert_eq!(code, 0, "{out}");
+    sync_zugang_schreiben(&u, &url, &token);
     let mut l = starten_mit("echt", &[], u, None);
     assert!(warten_bis(Duration::from_secs(3), || status(&l).contains("verbunden")), "{}", status(&l));
     // Baustein über die Web-API anlegen, er muss per SSE ankommen

@@ -137,18 +137,181 @@ fn anfrage(z: &Zugang, pfad: &str, body_timeout: Option<Duration>) -> Result<ure
     })
 }
 
-/// `tippkraft login`: Token prüfen, dann Zugang und Stand speichern. Liefert die Anzahl Bausteine.
-pub fn login(pfade: &Pfade, url: &str, token: &str) -> Result<usize, String> {
-    let z = Zugang { server: server_url(url)?, token: token.trim().to_string() };
-    let mut res = anfrage(&z, "/api/sync/snapshot", Some(Duration::from_secs(30))).map_err(|e| match e {
+/// Prüft den Token am Server, speichert dann Zugang und Stand. Liefert die Anzahl Bausteine.
+pub fn zugang_speichern(pfade: &Pfade, z: &Zugang) -> Result<usize, String> {
+    let mut res = anfrage(z, "/api/sync/snapshot", Some(Duration::from_secs(30))).map_err(|e| match e {
         Fehler::TokenUngueltig => "Token ungültig oder widerrufen".to_string(),
         Fehler::Netz(e) => format!("Server nicht erreichbar: {e}"),
     })?;
     let json = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
     let stand = format::parse(&json)?;
-    privat_schreiben(&pfade.zugang, serde_json::to_string_pretty(&z).unwrap().as_bytes()).map_err(|e| e.to_string())?;
+    privat_schreiben(&pfade.zugang, serde_json::to_string_pretty(z).unwrap().as_bytes()).map_err(|e| e.to_string())?;
     privat_schreiben(&pfade.stand, json.as_bytes()).map_err(|e| e.to_string())?;
     Ok(stand.bausteine.len())
+}
+
+// ---------- Gerät per Browser verbinden (F12): Rückruf an 127.0.0.1 mit PKCE (RFC 8252/7636) ----------
+
+pub const STANDARD_SERVER: &str = "https://tippkraft.com";
+const VERBINDEN_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn zufall() -> String {
+    let mut buf = [0u8; 32];
+    rustix::rand::getrandom(&mut buf, rustix::rand::GetRandomFlags::empty()).expect("kein Zufall verfügbar");
+    b64(&buf)
+}
+
+pub fn challenge(verifier: &str) -> String {
+    use sha2::Digest;
+    b64(&sha2::Sha256::digest(verifier.as_bytes()))
+}
+
+/// (verifier, challenge)
+pub fn pkce() -> (String, String) {
+    let v = zufall();
+    let c = challenge(&v);
+    (v, c)
+}
+
+fn url_kodieren(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+fn url_dekodieren(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match (b[i], b.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok())) {
+            (b'%', Some(x)) => {
+                out.push(x);
+                i += 3;
+            }
+            (b'+', _) => {
+                out.push(b' ');
+                i += 1;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub fn verbinden_url(server: &str, port: u16, state: &str, challenge: &str, name: &str) -> String {
+    format!("{server}/geraet-verbinden?port={port}&state={}&challenge={}&name={}", url_kodieren(state), url_kodieren(challenge), url_kodieren(name))
+}
+
+pub fn rechnername() -> String {
+    let n = rustix::system::uname().nodename().to_string_lossy().into_owned();
+    // "fedora.fritz.box" → "fedora"
+    let n: String = n.split('.').next().unwrap_or_default().chars().filter(|c| !c.is_control()).take(50).collect();
+    if n.is_empty() { "Desktop".into() } else { n }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Rueckruf {
+    Code(String),
+    Abgebrochen,
+    /// anderer Pfad oder falscher state: ignorieren und weiter warten
+    Fremd,
+}
+
+/// Wertet die erste Zeile einer HTTP-Anfrage an den Rückruf-Port aus
+pub fn rueckruf(anfragezeile: &str, state: &str) -> Rueckruf {
+    let pfad = anfragezeile.split(' ').nth(1).unwrap_or_default();
+    let Some(query) = pfad.strip_prefix("/fertig?") else { return Rueckruf::Fremd };
+    let mut werte = std::collections::HashMap::new();
+    for paar in query.split('&') {
+        if let Some((k, v)) = paar.split_once('=') {
+            werte.insert(k, url_dekodieren(v));
+        }
+    }
+    if werte.get("state").map(String::as_str) != Some(state) {
+        return Rueckruf::Fremd;
+    }
+    match (werte.remove("code"), werte.get("fehler")) {
+        (_, Some(_)) => Rueckruf::Abgebrochen,
+        (Some(c), None) if !c.is_empty() => Rueckruf::Code(c),
+        _ => Rueckruf::Fremd,
+    }
+}
+
+fn antworten(mut s: &std::net::TcpStream, status: &str, text: &str) {
+    let html = format!(
+        "<!doctype html><meta charset=utf-8><title>tippkraft</title><body style=\"font:16px system-ui;max-width:28rem;margin:15vh auto;padding:0 1rem\"><h1 style=\"color:#d9480f\">tippkraft</h1><p>{text}</p>"
+    );
+    let _ = s.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{html}", html.len()).as_bytes());
+}
+
+fn code_einloesen(server: &str, code: &str, verifier: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Antwort {
+        token: String,
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(30))).http_status_as_error(false).build().into();
+    let mut res = agent
+        .post(format!("{server}/api/sync/token"))
+        .header("content-type", "application/json")
+        .send(serde_json::json!({ "code": code, "verifier": verifier }).to_string())
+        .map_err(|e| format!("Server nicht erreichbar: {e}"))?;
+    let text = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    if res.status() != 200 {
+        let msg = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v["error"].as_str().map(String::from));
+        return Err(msg.unwrap_or_else(|| format!("Server antwortet {}", res.status())));
+    }
+    serde_json::from_str::<Antwort>(&text).map(|a| a.token).map_err(|e| e.to_string())
+}
+
+/// `tippkraft verbinden`: Browser öffnen, auf den Rückruf warten, Code gegen Token tauschen, speichern.
+/// Liefert (Server, Anzahl Bausteine).
+pub fn verbinden(pfade: &Pfade, server: Option<&str>, browser: &str) -> Result<(String, usize), String> {
+    let server = server_url(&server.map(String::from).or_else(|| Zugang::laden(&pfade.zugang).map(|z| z.server)).unwrap_or_else(|| STANDARD_SERVER.into()))?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let state = zufall();
+    let (verifier, ch) = pkce();
+    let url = verbinden_url(&server, port, &state, &ch, &rechnername());
+    println!("Browser öffnet sich. Falls nicht, diese Adresse öffnen:\n{url}");
+    let _ = std::process::Command::new(browser).arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let ende = std::time::Instant::now() + VERBINDEN_TIMEOUT;
+    while std::time::Instant::now() < ende {
+        let Ok((s, _)) = listener.accept() else {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        };
+        let _ = s.set_nonblocking(false);
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut zeile = String::new();
+        if BufReader::new(&s).read_line(&mut zeile).is_err() {
+            continue;
+        }
+        match rueckruf(zeile.trim_end(), &state) {
+            Rueckruf::Fremd => antworten(&s, "400 Bad Request", "Unbekannte Anfrage."),
+            Rueckruf::Abgebrochen => {
+                antworten(&s, "200 OK", "Verbinden abgebrochen. Du kannst dieses Fenster schließen.");
+                return Err("Verbinden abgebrochen".into());
+            }
+            Rueckruf::Code(code) => {
+                let ergebnis = code_einloesen(&server, &code, &verifier).and_then(|token| zugang_speichern(pfade, &Zugang { server: server.clone(), token }));
+                match &ergebnis {
+                    Ok(_) => antworten(&s, "200 OK", "Verbunden. Du kannst dieses Fenster schließen."),
+                    Err(e) => antworten(&s, "200 OK", &format!("Verbinden fehlgeschlagen: {e}")),
+                }
+                return ergebnis.map(|n| (server, n));
+            }
+        }
+    }
+    Err("Keine Rückmeldung vom Browser innerhalb von 5 Minuten".into())
 }
 
 pub enum Meldung {
@@ -169,7 +332,8 @@ pub fn schleife(pfade: &Pfade, mut melden: impl FnMut(Meldung)) {
         match anfrage(&z, "/api/sync/stream", Some(Duration::from_secs(120))) {
             Err(Fehler::TokenUngueltig) => {
                 melden(Meldung::Verbindung(Verbindung::TokenUngueltig));
-                std::thread::sleep(Duration::from_secs(60));
+                // kurz, damit ein neues "tippkraft verbinden" schnell greift
+                std::thread::sleep(Duration::from_secs(10));
             }
             Err(Fehler::Netz(_)) => {
                 melden(Meldung::Verbindung(Verbindung::Offline));
@@ -185,19 +349,23 @@ pub fn schleife(pfade: &Pfade, mut melden: impl FnMut(Meldung)) {
                     if event != "snapshot" {
                         continue;
                     }
-                    if erstes {
-                        erstes = false;
-                        backoff = 1;
-                        melden(Meldung::Verbindung(Verbindung::Verbunden));
-                    }
                     match format::parse(&data) {
                         Ok(stand) => {
                             if let Err(e) = privat_schreiben(&pfade.stand, data.as_bytes()) {
                                 eprintln!("tippkraft: Stand nicht speicherbar: {e}");
                             }
                             melden(Meldung::Stand(stand));
+                            // erst nach dem Stand, damit der Status nie "verbunden" mit altem Stand zeigt
+                            if erstes {
+                                erstes = false;
+                                backoff = 1;
+                                melden(Meldung::Verbindung(Verbindung::Verbunden));
+                            }
                         }
-                        Err(_) => melden(Meldung::Verbindung(Verbindung::ServerNeuer)),
+                        Err(_) => {
+                            erstes = false;
+                            melden(Meldung::Verbindung(Verbindung::ServerNeuer));
+                        }
                     }
                 }
                 if erstes {
@@ -255,6 +423,39 @@ mod tests {
         assert_eq!(std::fs::metadata(&datei).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(datei.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pkce_challenge_ist_base64url_sha256() {
+        // SHA-256("abc"), base64url ohne Padding
+        assert_eq!(challenge("abc"), "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0");
+        let (v, c) = pkce();
+        assert_eq!(v.len(), 43);
+        assert_eq!(c, challenge(&v));
+        assert_ne!(pkce().0, v, "zufällig");
+    }
+
+    #[test]
+    fn verbinden_url_kodiert_den_namen() {
+        assert_eq!(
+            verbinden_url("http://localhost:4321", 45123, "S", "C", "mein rechner/ä"),
+            "http://localhost:4321/geraet-verbinden?port=45123&state=S&challenge=C&name=mein%20rechner%2F%C3%A4"
+        );
+    }
+
+    #[test]
+    fn rueckruf_auswerten() {
+        assert_eq!(rueckruf("GET /fertig?code=abc&state=S HTTP/1.1", "S"), Rueckruf::Code("abc".into()));
+        assert_eq!(rueckruf("GET /fertig?state=S&fehler=abgebrochen HTTP/1.1", "S"), Rueckruf::Abgebrochen);
+        assert_eq!(rueckruf("GET /fertig?code=abc&state=X HTTP/1.1", "S"), Rueckruf::Fremd);
+        assert_eq!(rueckruf("GET /favicon.ico HTTP/1.1", "S"), Rueckruf::Fremd);
+        assert_eq!(rueckruf("GET /fertig?code=a%2Db&state=S HTTP/1.1", "S"), Rueckruf::Code("a-b".into()));
+    }
+
+    #[test]
+    fn rechnername_ist_gesetzt_und_kurz() {
+        let n = rechnername();
+        assert!(!n.is_empty() && n.chars().count() <= 50 && !n.contains('.'));
     }
 
     #[test]
