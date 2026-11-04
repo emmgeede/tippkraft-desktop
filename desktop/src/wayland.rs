@@ -173,8 +173,12 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Zustand {
             // pread ab Position 0: Das fd teilt sich den Lesezeiger mit anderen Clients
             let mut buf = vec![0u8; size as usize];
             if std::os::unix::fs::FileExt::read_exact_at(&std::fs::File::from(fd), &mut buf, 0).is_ok() {
-                z.keymap = Some(String::from_utf8_lossy(&buf).trim_end_matches('\0').to_string());
-                z.neu = true;
+                let text = String::from_utf8_lossy(&buf).trim_end_matches('\0').to_string();
+                // Das eigene Ausgabe-Keymap schickt der Compositor auch an uns. Nicht als Layout übernehmen.
+                if !text.contains("tippkraft") {
+                    z.keymap = Some(text);
+                    z.neu = true;
+                }
             }
         }
     }
