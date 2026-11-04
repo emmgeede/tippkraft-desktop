@@ -298,7 +298,7 @@ fn run() -> Result<(), String> {
                         } else {
                             // kurz warten, damit bereits weitergegebene Tasten vor der Ausgabe ankommen
                             std::thread::sleep(Duration::from_millis(15));
-                            if let Err(e) = wl.tippen(loeschen, &aktionen, o.verzoegerung) {
+                            if let Err(e) = wl.tippen(loeschen, &aktionen, o.verzoegerung, || herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
                                 eprintln!("tippkraft: Ausgabe fehlgeschlagen: {e}");
                             }
                         }

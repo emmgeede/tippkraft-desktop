@@ -69,8 +69,8 @@ impl Wayland {
         let _ = self.queue.dispatch_pending(&mut self.zustand);
     }
 
-    /// `loeschen`-mal Backspace, dann die Aktionen tippen
-    pub fn tippen(&mut self, loeschen: usize, aktionen: &[Aktion], verzoegerung: Duration) -> Result<(), String> {
+    /// `loeschen`-mal Backspace, dann die Aktionen tippen. `lebt` wird pro Taste aufgerufen (Watchdog).
+    pub fn tippen(&mut self, loeschen: usize, aktionen: &[Aktion], verzoegerung: Duration, lebt: impl Fn()) -> Result<(), String> {
         let vk = self.vk.as_ref().ok_or("keine virtuelle Tastatur")?;
         let folge = tastenfolge(loeschen, aktionen);
         if folge.is_empty() {
@@ -90,6 +90,7 @@ impl Wayland {
         vk.keymap(xkb::KEYMAP_FORMAT_TEXT_V1, datei.as_fd(), keymap.len() as u32 + 1);
         vk.modifiers(0, 0, 0, 0);
         for s in folge {
+            lebt();
             let code = symbole.iter().position(|x| *x == s).unwrap() as u32 + 1; // evdev-Code = xkb-Code - 8
             let t = self.start.elapsed().as_millis() as u32;
             vk.key(t, code, 1);
