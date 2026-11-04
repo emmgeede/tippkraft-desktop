@@ -1,37 +1,55 @@
 {
-  "version": 1,
+  "version": 2,
   "bausteine": [
     {
       "kuerzel": ";sig",
       "inhalt": "Viele Grüße\nMax Mustermann",
+      "bezeichnung": null,
       "ausloeser": "sofort",
       "wortgrenze": false,
       "grossKleinBeachten": false,
-      "schreibweiseUebernehmen": false
+      "schreibweiseUebernehmen": false,
+      "aktiv": true
     },
     {
       "kuerzel": "adr",
       "inhalt": "Musterstraße 1[[Tab]]12345 Musterstadt[[Enter:2]]",
+      "bezeichnung": "Adresse",
       "ausloeser": "tab",
       "wortgrenze": true,
       "grossKleinBeachten": true,
-      "schreibweiseUebernehmen": true
+      "schreibweiseUebernehmen": true,
+      "aktiv": true
+    },
+    {
+      "kuerzel": "alt",
+      "inhalt": "Veralteter Textteil",
+      "bezeichnung": "Nur zum Nachschlagen",
+      "ausloeser": "leertaste",
+      "wortgrenze": true,
+      "grossKleinBeachten": false,
+      "schreibweiseUebernehmen": true,
+      "aktiv": false
     },
     {
       "kuerzel": "brief",
       "inhalt": "{{?Anrede:Herr|Frau}} {{?Name}}, heute ist {{=datum}}.\n{{{{?wörtlich}} {{?Name}}",
+      "bezeichnung": "Brief mit Anrede",
       "ausloeser": "leertaste",
       "wortgrenze": true,
       "grossKleinBeachten": false,
-      "schreibweiseUebernehmen": true
+      "schreibweiseUebernehmen": true,
+      "aktiv": true
     },
     {
       "kuerzel": "mfg",
       "inhalt": "Mit freundlichen Grüßen 🙂 [[[[kein Token]]",
+      "bezeichnung": "Grußformel",
       "ausloeser": "leertaste",
       "wortgrenze": true,
       "grossKleinBeachten": false,
-      "schreibweiseUebernehmen": true
+      "schreibweiseUebernehmen": true,
+      "aktiv": true
     }
   ],
   "ausschluesse": [

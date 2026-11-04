@@ -86,16 +86,16 @@ struct App {
 }
 
 /// Farben wie im Webtool (web/src/layouts/Layout.astro), hell und dunkel
-struct Farben {
-    bg: egui::Color32,
-    fg: egui::Color32,
-    muted: egui::Color32,
-    border: egui::Color32,
-    accent: egui::Color32,
-    flaeche: egui::Color32,
+pub(crate) struct Farben {
+    pub bg: egui::Color32,
+    pub fg: egui::Color32,
+    pub muted: egui::Color32,
+    pub border: egui::Color32,
+    pub accent: egui::Color32,
+    pub flaeche: egui::Color32,
 }
 
-fn farben(dunkel: bool) -> Farben {
+pub(crate) fn farben(dunkel: bool) -> Farben {
     use egui::Color32 as C;
     if dunkel {
         Farben { bg: C::from_rgb(0x16, 0x16, 0x16), fg: C::from_rgb(0xee, 0xee, 0xee), muted: C::from_rgb(0x99, 0x99, 0x99), border: C::from_rgb(0x33, 0x33, 0x33), accent: C::from_rgb(0xff, 0x7a, 0x3d), flaeche: C::from_rgb(0x22, 0x22, 0x22) }
@@ -113,7 +113,7 @@ fn schrift_laden(fonts: &mut egui::FontDefinitions, name: &str, familie: egui::F
 }
 
 /// Stil wie im Webtool: Noto Sans, Akzentfarbe, 6 px Radius, viel Luft, hell/dunkel nach System
-fn stil(ctx: &egui::Context) {
+pub(crate) fn stil(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     schrift_laden(&mut fonts, "noto", egui::FontFamily::Proportional, "Noto Sans");
     schrift_laden(&mut fonts, "noto-mono", egui::FontFamily::Monospace, "Noto Sans Mono");

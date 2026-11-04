@@ -5,6 +5,8 @@ use crate::format::{Aktion, Ausloeser, Baustein, Stand, Taste, abfragen, aktione
 
 /// Fenster des Abfrage-Popups. Darin löst tippkraft nie aus (F8).
 pub const POPUP_APP_ID: &str = "tippkraft-popup";
+/// Fenster der Baustein-Übersicht (F14), ebenfalls ausgeschlossen
+pub const UEBERSICHT_APP_ID: &str = "tippkraft-uebersicht";
 
 const PUFFER_MAX: usize = 64;
 
@@ -74,7 +76,8 @@ impl Engine {
     }
 
     pub fn stand(&mut self, stand: Stand) {
-        let mut bausteine = stand.bausteine;
+        // Deaktivierte nur für die Übersicht (F14), sie lösen nie aus
+        let mut bausteine: Vec<Baustein> = stand.bausteine.into_iter().filter(|b| b.aktiv).collect();
         // längstes Kürzel zuerst, damit es bei mehreren Treffern gewinnt
         bausteine.sort_by_key(|b| std::cmp::Reverse(b.kuerzel.chars().count()));
         self.bausteine = bausteine;
@@ -84,7 +87,7 @@ impl Engine {
     /// Fokus auf ein anderes Fenster: Puffer verwerfen, Ausschlussliste prüfen
     pub fn fokus(&mut self, app_id: Option<&str>) {
         self.reset();
-        self.ausgeschlossen = app_id.is_some_and(|a| a == POPUP_APP_ID || self.ausschluesse.contains(&a.to_lowercase()));
+        self.ausgeschlossen = app_id.is_some_and(|a| a == POPUP_APP_ID || a == UEBERSICHT_APP_ID || self.ausschluesse.contains(&a.to_lowercase()));
     }
 
     /// Nur für Tests: festes Datum statt heute
@@ -228,6 +231,8 @@ mod tests {
         Baustein {
             kuerzel: kuerzel.into(),
             inhalt: inhalt.into(),
+            bezeichnung: None,
+            aktiv: true,
             ausloeser,
             wortgrenze: true,
             gross_klein_beachten: false,
@@ -437,6 +442,21 @@ mod tests {
     fn im_popup_loest_nichts_aus_ac10() {
         let mut e = engine(vec![b("mfg", "x", Ausloeser::Leertaste)]);
         e.fokus(Some(POPUP_APP_ID));
+        assert_eq!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen));
+    }
+
+    #[test]
+    fn deaktivierte_loesen_nicht_aus_f14_ac2() {
+        let mut e = engine(vec![Baustein { aktiv: false, ..b("sig", "x", Ausloeser::Leertaste) }, b("mfg", "y", Ausloeser::Leertaste)]);
+        assert_eq!(tippe(&mut e, "sig ").last(), Some(&Durchlassen));
+        assert_eq!(tippe(&mut e, "mfg ").last(), Some(&ersetzt(3, "y")));
+        assert_eq!(e.anzahl(), 1, "Status zählt nur auslösende");
+    }
+
+    #[test]
+    fn in_der_uebersicht_loest_nichts_aus_f14_ac7() {
+        let mut e = engine(vec![b("mfg", "x", Ausloeser::Leertaste)]);
+        e.fokus(Some(UEBERSICHT_APP_ID));
         assert_eq!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen));
     }
 }

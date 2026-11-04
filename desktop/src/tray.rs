@@ -89,6 +89,7 @@ pub fn icon(groesse: i32, z: &TrayZustand) -> ksni::Icon {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAktion {
     Pause,
+    Uebersicht,
     Webtool,
     Verbinden,
     Beenden,
@@ -124,6 +125,7 @@ impl ksni::Tray for Tray {
             StandardItem { label: statuszeile(&self.zustand), enabled: false, ..Default::default() }.into(),
             ksni::MenuItem::Separator,
             eintrag(if self.zustand.pausiert { "Fortsetzen" } else { "Pausieren" }, TrayAktion::Pause),
+            eintrag("Bausteine anzeigen", TrayAktion::Uebersicht),
             eintrag("Webtool öffnen", TrayAktion::Webtool),
             eintrag("Neu verbinden …", TrayAktion::Verbinden),
             ksni::MenuItem::Separator,

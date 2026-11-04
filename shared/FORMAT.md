@@ -8,8 +8,10 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `version` | Zahl | Formatversion, aktuell `1`. Der Desktop lehnt unbekannte Versionen ab und behält seinen letzten Stand |
-| `bausteine` | Liste | Nur Bausteine, die auslösen dürfen (aktiv und in aktiver oder keiner Gruppe). Sortiert nach `lower(kuerzel)` in Zeichencode-Reihenfolge |
+| `version` | Zahl | Formatversion, aktuell `2`. Der Desktop liest 1 und 2 und lehnt unbekannte ab (behält dann seinen letzten Stand) |
+| `bausteine` | Liste | Alle Bausteine des Nutzers, sortiert nach `lower(kuerzel)` in Zeichencode-Reihenfolge. Auslösen dürfen nur die mit `aktiv: true` |
+| `bausteine[].aktiv` | bool | Ab Version 2. `true`: Baustein aktiv und Gruppe aktiv oder keine. Fehlt (Version 1): `true` |
+| `bausteine[].bezeichnung` | Text oder `null` | Ab Version 2, für die Übersicht (F14). Fehlt (Version 1): `null` |
 | `bausteine[].kuerzel` | Text | 1 bis 64 Zeichen, keine Leer- oder Steuerzeichen |
 | `bausteine[].inhalt` | Text | Einzufügender Text, Zeilenumbruch immer `\n`, keine Steuerzeichen außer `\t` und `\n`. Kann Tasten-Tokens enthalten (siehe unten). Verweise `{{kürzel}}` hat der Server schon aufgelöst. Übrig bleiben Platzhalter und `{{{{` (siehe unten) |
 | `bausteine[].ausloeser` | `"sofort"` \| `"leertaste"` \| `"enter"` \| `"tab"` | Was die Ersetzung auslöst. Der Auslöser selbst wird verbraucht, nicht mitgesendet |

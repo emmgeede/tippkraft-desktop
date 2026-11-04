@@ -26,6 +26,7 @@ const HILFE: &str = "tippkraft – Textexpander für Wayland
   tippkraft einrichten            Installieren, Autostart einrichten, starten und mit dem Konto verbinden
   tippkraft verbinden             Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
   tippkraft status                Zustand anzeigen
+  tippkraft uebersicht            Alle Bausteine anzeigen und filtern (Mod+Alt+Leertaste)
   tippkraft pause                 Pausieren bzw. fortsetzen (gibt die Tastatur frei)
   tippkraft run [--verzoegerung MS] [--stand DATEI] [--geraet /dev/input/eventN] [--trocken]
 
@@ -53,6 +54,10 @@ fn main() {
         Some("pause") => pause(&pfade),
         Some("einrichten") => einrichten(),
         Some("popup") => popup(),
+        Some("uebersicht") => {
+            let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok()).unwrap_or_default();
+            tippkraft::uebersicht::zeigen(stand, &pfade.socket.with_file_name("tippkraft-uebersicht.lock"))
+        }
         _ => {
             println!("{HILFE}");
             return;
@@ -535,6 +540,11 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                         let url = Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_else(|| sync::STANDARD_SERVER.into());
                         let browser = std::env::var("TIPPKRAFT_BROWSER").unwrap_or_else(|_| "xdg-open".into());
                         let _ = std::process::Command::new(browser).arg(url).spawn();
+                    }
+                    TrayAktion::Uebersicht => {
+                        if let Ok(exe) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe).arg("uebersicht").spawn();
+                        }
                     }
                     TrayAktion::Verbinden => {
                         if let Ok(exe) = std::env::current_exe() {

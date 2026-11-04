@@ -16,6 +16,12 @@ pub enum Ausloeser {
 pub struct Baustein {
     pub kuerzel: String,
     pub inhalt: String,
+    /// ab Version 2
+    #[serde(default)]
+    pub bezeichnung: Option<String>,
+    /// ab Version 2, bei Version 1 immer true
+    #[serde(default = "wahr")]
+    pub aktiv: bool,
     pub ausloeser: Ausloeser,
     pub wortgrenze: bool,
     pub gross_klein_beachten: bool,
@@ -29,9 +35,13 @@ pub struct Stand {
     pub ausschluesse: Vec<String>,
 }
 
+fn wahr() -> bool {
+    true
+}
+
 pub fn parse(json: &str) -> Result<Stand, String> {
     let stand: Stand = serde_json::from_str(json).map_err(|e| format!("Stand nicht lesbar: {e}"))?;
-    if stand.version != 1 {
+    if !(1..=2).contains(&stand.version) {
         return Err(format!("Version {} wird nicht unterstützt, bitte tippkraft aktualisieren", stand.version));
     }
     Ok(stand)
@@ -198,7 +208,11 @@ mod tests {
     fn liest_den_vertrag_ac15() {
         let json = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../shared/snippets.example.json")).unwrap();
         let stand = parse(&json).unwrap();
-        assert_eq!(stand.bausteine.len(), 4);
+        assert_eq!(stand.version, 2);
+        assert_eq!(stand.bausteine.len(), 5);
+        let alt = &stand.bausteine[2];
+        assert_eq!((alt.kuerzel.as_str(), alt.aktiv, alt.bezeichnung.as_deref()), ("alt", false, Some("Nur zum Nachschlagen")));
+        assert_eq!(stand.bausteine[1].bezeichnung.as_deref(), Some("Adresse"));
         assert_eq!(stand.ausschluesse, vec!["1password", "org.keepassxc.KeePassXC"]);
         let sig = &stand.bausteine[0];
         assert_eq!(sig.kuerzel, ";sig");
@@ -206,8 +220,8 @@ mod tests {
         assert!(!sig.wortgrenze && !sig.gross_klein_beachten && !sig.schreibweise_uebernehmen);
         assert_eq!(stand.bausteine[1].ausloeser, Ausloeser::Tab);
         assert!(stand.bausteine[1].gross_klein_beachten);
-        assert_eq!(stand.bausteine[3].ausloeser, Ausloeser::Leertaste);
-        let brief = &stand.bausteine[2];
+        assert_eq!(stand.bausteine[4].ausloeser, Ausloeser::Leertaste);
+        let brief = &stand.bausteine[3];
         assert_eq!(brief.kuerzel, "brief");
         assert_eq!(
             abfragen(&brief.inhalt),
@@ -219,9 +233,16 @@ mod tests {
     }
 
     #[test]
+    fn liest_version_1_mit_standardwerten_f14_ac2() {
+        let s = parse(r#"{"version":1,"bausteine":[{"kuerzel":"a","inhalt":"b","ausloeser":"tab","wortgrenze":true,"grossKleinBeachten":false,"schreibweiseUebernehmen":true}],"ausschluesse":[]}"#).unwrap();
+        assert!(s.bausteine[0].aktiv);
+        assert_eq!(s.bausteine[0].bezeichnung, None);
+    }
+
+    #[test]
     fn lehnt_unbekannte_version_ab_ac15() {
-        let err = parse(r#"{"version":2,"bausteine":[],"ausschluesse":[]}"#).unwrap_err();
-        assert!(err.contains("Version 2"), "{err}");
+        let err = parse(r#"{"version":3,"bausteine":[],"ausschluesse":[]}"#).unwrap_err();
+        assert!(err.contains("Version 3"), "{err}");
         assert!(parse("kein json").is_err());
     }
 
