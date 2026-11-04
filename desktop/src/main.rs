@@ -1,7 +1,9 @@
-//! tippkraft-Daemon: übernimmt die Tastaturen exklusiv, reicht jede Taste über eine uinput-Tastatur weiter
+//! tippkraft: Textexpander für Wayland.
+//! `run` übernimmt die Tastaturen exklusiv, reicht jede Taste über eine uinput-Tastatur weiter
 //! und hält nur die Auslösetaste eines passenden Kürzels zurück.
 
 use std::collections::HashSet;
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -12,42 +14,105 @@ use evdev::uinput::VirtualDevice;
 use evdev::{AttributeSet, Device, EventType, InputEvent, KeyCode};
 use tippkraft::engine::{Eingabe, Engine, Entscheidung};
 use tippkraft::format::{self, Stand};
-use tippkraft::{niri, wayland};
+use tippkraft::sync::{self, Pfade, Verbindung, Zugang};
+use tippkraft::{niri, steuerung, wayland};
 use xkbcommon::xkb;
 
 const WATCHDOG: Duration = Duration::from_secs(2);
 const WEITERGABE_NAME: &str = "tippkraft-weitergabe";
+const HILFE: &str = "tippkraft – Textexpander für Wayland
+
+  tippkraft einrichten            Binärdatei installieren, Autostart einrichten und starten
+  tippkraft login <URL> <Token>   Mit dem Webtool verbinden (Token unter Einstellungen → Desktop-Geräte)
+  tippkraft status                Zustand anzeigen
+  tippkraft pause                 Pausieren bzw. fortsetzen (gibt die Tastatur frei)
+  tippkraft run [--verzoegerung MS] [--stand DATEI] [--geraet /dev/input/eventN] [--trocken]
+
+Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.";
 
 enum Ereignis {
     Taste { key: KeyCode, wert: i32 },
     Klick,
     Fokus(Option<String>),
+    Sync(sync::Meldung),
+    Steuerung(String, Sender<String>),
 }
 
-struct Optionen {
-    stand: PathBuf,
-    geraete: Vec<PathBuf>,
-    trocken: bool,
-    verzoegerung: Duration,
-}
-
-fn optionen() -> Result<Optionen, String> {
-    let mut args = std::env::args().skip(1);
-    if args.next().as_deref() != Some("run") {
-        return Err("Aufruf: tippkraft run [--stand DATEI] [--geraet /dev/input/eventN] [--verzoegerung MS] [--trocken]".into());
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let pfade = Pfade::aus_umgebung();
+    let ergebnis = match args.first().map(String::as_str) {
+        Some("run") => run(&args[1..], pfade),
+        Some("login") if args.len() == 3 => sync::login(&pfade, &args[1], &args[2]).map(|n| {
+            println!("Angemeldet bei {}, {n} Bausteine", sync::server_url(&args[1]).unwrap_or_default());
+        }),
+        Some("status") => status(&pfade),
+        Some("pause") => pause(&pfade),
+        Some("einrichten") => einrichten(),
+        _ => {
+            println!("{HILFE}");
+            return;
+        }
+    };
+    if let Err(e) = ergebnis {
+        eprintln!("tippkraft: {e}");
+        std::process::exit(1);
     }
-    let daten = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
-    let mut o = Optionen { stand: daten.join("tippkraft/stand.json"), geraete: vec![], trocken: false, verzoegerung: Duration::from_millis(1) };
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--stand" => o.stand = args.next().ok_or("--stand braucht einen Pfad")?.into(),
-            "--geraet" => o.geraete.push(args.next().ok_or("--geraet braucht einen Pfad")?.into()),
-            "--verzoegerung" => o.verzoegerung = Duration::from_millis(args.next().and_then(|v| v.parse().ok()).ok_or("--verzoegerung braucht Millisekunden")?),
-            "--trocken" => o.trocken = true,
-            _ => return Err(format!("Unbekannte Option {a}")),
+}
+
+fn status(pfade: &Pfade) -> Result<(), String> {
+    let antwort = steuerung::senden(&pfade.socket, "status").ok_or("tippkraft läuft nicht")?;
+    println!("{antwort}");
+    Ok(())
+}
+
+fn pause(pfade: &Pfade) -> Result<(), String> {
+    let antwort = steuerung::senden(&pfade.socket, "pause").ok_or("tippkraft läuft nicht")?;
+    let text = format!("tippkraft {antwort}");
+    println!("{text}");
+    if std::env::var_os("TIPPKRAFT_KEINE_BENACHRICHTIGUNG").is_none() {
+        let _ = std::process::Command::new("notify-send").args(["-a", "tippkraft", "-t", "2000", &text]).status();
+    }
+    Ok(())
+}
+
+const UNIT: &str = "[Unit]
+Description=tippkraft Textexpander
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/tippkraft run
+# Exit 0 (Notausschalter) startet nicht neu, Exit 3 (Watchdog) und Abstürze schon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+";
+
+fn einrichten() -> Result<(), String> {
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME nicht gesetzt")?);
+    let ziel = home.join(".local/bin/tippkraft");
+    let quelle = std::env::current_exe().map_err(|e| e.to_string())?;
+    if quelle != ziel {
+        std::fs::create_dir_all(ziel.parent().unwrap()).map_err(|e| e.to_string())?;
+        // über temporäre Datei + rename, damit auch eine laufende alte Version ersetzt werden kann
+        let tmp = ziel.with_extension("neu");
+        std::fs::copy(&quelle, &tmp).and_then(|_| std::fs::rename(&tmp, &ziel)).map_err(|e| format!("{}: {e}", ziel.display()))?;
+    }
+    let unit = home.join(".config/systemd/user/tippkraft.service");
+    std::fs::create_dir_all(unit.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&unit, UNIT).map_err(|e| e.to_string())?;
+    let systemctl = std::env::var("TIPPKRAFT_SYSTEMCTL").unwrap_or_else(|_| "systemctl".into());
+    for args in [&["--user", "daemon-reload"][..], &["--user", "enable", "tippkraft.service"], &["--user", "restart", "tippkraft.service"]] {
+        let ok = std::process::Command::new(&systemctl).args(args).status().map_err(|e| e.to_string())?.success();
+        if !ok {
+            return Err(format!("systemctl {} fehlgeschlagen", args.join(" ")));
         }
     }
-    Ok(o)
+    println!("Eingerichtet: {} und tippkraft.service läuft.\nJetzt anmelden: tippkraft login <URL> <Token>", ziel.display());
+    Ok(())
 }
 
 fn stand_laden(pfad: &PathBuf) -> Stand {
@@ -67,6 +132,13 @@ fn ist_tastatur(d: &Device) -> bool {
 
 fn ist_zeiger(d: &Device) -> bool {
     d.supported_keys().is_some_and(|k| k.contains(KeyCode::BTN_LEFT) || k.contains(KeyCode::BTN_TOUCH))
+}
+
+/// EVIOCGRAB auf einem dupliziertem fd (teilt sich die Übernahme mit dem Gerät im Lese-Thread)
+fn greifen(fd: &OwnedFd, an: bool) -> std::io::Result<()> {
+    const EVIOCGRAB: rustix::ioctl::Opcode = rustix::ioctl::opcode::write::<i32>(b'E', 0x90);
+    // SAFETY: EVIOCGRAB erwartet den Wert direkt als Argument, keinen Zeiger
+    unsafe { rustix::ioctl::ioctl(fd, rustix::ioctl::IntegerSetter::<EVIOCGRAB>::new_usize(an as usize)) }.map_err(Into::into)
 }
 
 /// Übernimmt die Tastatur erst, wenn keine Taste mehr gedrückt ist, sonst bleibt eine Taste "hängen"
@@ -145,26 +217,55 @@ fn jetzt_ms() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("tippkraft: {e}");
-        std::process::exit(1);
-    }
+struct Optionen {
+    geraete: Vec<PathBuf>,
+    trocken: bool,
+    verzoegerung: Duration,
 }
 
-fn run() -> Result<(), String> {
-    let o = optionen()?;
+fn optionen(args: &[String], pfade: &mut Pfade) -> Result<Optionen, String> {
+    let mut o = Optionen { geraete: vec![], trocken: false, verzoegerung: Duration::from_millis(1) };
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--stand" => pfade.stand = it.next().ok_or("--stand braucht einen Pfad")?.into(),
+            "--geraet" => o.geraete.push(it.next().ok_or("--geraet braucht einen Pfad")?.into()),
+            "--verzoegerung" => o.verzoegerung = Duration::from_millis(it.next().and_then(|v| v.parse().ok()).ok_or("--verzoegerung braucht Millisekunden")?),
+            "--trocken" => o.trocken = true,
+            _ => return Err(format!("Unbekannte Option {a}\n\n{HILFE}")),
+        }
+    }
+    Ok(o)
+}
+
+fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
+    let o = optionen(args, &mut pfade)?;
+    let (tx, rx) = mpsc::channel::<Ereignis>();
+
+    // Zuerst den Steuer-Socket: läuft schon ein Daemon, keine Tastatur anfassen
+    let (steuer_tx, steuer_rx) = mpsc::channel::<(String, Sender<String>)>();
+    steuerung::lauschen(&pfade.socket, steuer_tx)?;
+    {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for (befehl, antwort) in steuer_rx {
+                if tx.send(Ereignis::Steuerung(befehl, antwort)).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+
     let mut wl = wayland::Wayland::verbinden(!o.trocken)?;
     let mut state = xkb_state(wl.zustand.keymap.as_deref().unwrap_or_default())?;
     wl.zustand.neu = false;
 
-    let mut engine = Engine::new(stand_laden(&o.stand));
-    let mut stand_zeit = std::fs::metadata(&o.stand).and_then(|m| m.modified()).ok();
+    let mut engine = Engine::new(stand_laden(&pfade.stand));
+    let mut stand_zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
 
     // Geräte: mit --geraet nur diese (Tests), sonst alle Tastaturen übernehmen und Zeiger nur lesen
-    let (tx, rx) = mpsc::channel::<Ereignis>();
     let mut tasten: AttributeSet<KeyCode> = AttributeSet::new();
-    let mut anzahl = 0;
+    let mut griffe: Vec<OwnedFd> = vec![];
     let geraete: Vec<(Device, bool)> = if o.geraete.is_empty() {
         evdev::enumerate()
             .filter_map(|(_, d)| if ist_tastatur(&d) { Some((d, true)) } else if ist_zeiger(&d) { Some((d, false)) } else { None })
@@ -178,11 +279,11 @@ fn run() -> Result<(), String> {
                 tasten.insert(k);
             }
             uebernehmen(&mut d).map_err(|e| format!("Tastatur {} nicht übernehmbar: {e}", d.name().unwrap_or("?")))?;
-            anzahl += 1;
+            griffe.push(d.as_fd().try_clone_to_owned().map_err(|e| e.to_string())?);
         }
         lesen(d, tx.clone(), tastatur);
     }
-    if anzahl == 0 {
+    if griffe.is_empty() {
         return Err("Keine Tastatur gefunden (Gruppe input?)".into());
     }
     let mut weitergabe = if o.trocken {
@@ -201,6 +302,11 @@ fn run() -> Result<(), String> {
             }
         });
     }
+    {
+        let tx = tx.clone();
+        let pfade = Pfade { zugang: pfade.zugang.clone(), stand: pfade.stand.clone(), socket: pfade.socket.clone() };
+        std::thread::spawn(move || sync::schleife(&pfade, |m| drop(tx.send(Ereignis::Sync(m)))));
+    }
 
     // Watchdog: hängt die Hauptschleife, Prozess beenden. Der Kernel gibt die Tastaturen dann frei.
     let herzschlag = Arc::new(AtomicU64::new(jetzt_ms()));
@@ -216,10 +322,14 @@ fn run() -> Result<(), String> {
     }
     let test_haengen = std::env::var_os("TIPPKRAFT_TEST_HAENGEN").is_some();
 
-    eprintln!("tippkraft: bereit ({anzahl} Tastatur(en), {})", if o.trocken { "trocken" } else { "aktiv" });
+    eprintln!("tippkraft: bereit ({} Tastatur(en), {})", griffe.len(), if o.trocken { "trocken" } else { "aktiv" });
     let mut gedrueckt: HashSet<KeyCode> = HashSet::new();
+    let mut weitergegeben: HashSet<KeyCode> = HashSet::new();
     let mut zurueckgehalten: HashSet<KeyCode> = HashSet::new();
     let mut letzte_pruefung = Instant::now();
+    let mut verbindung = Verbindung::NichtAngemeldet;
+    let mut pausiert = false;
+    let mut greifen_ausstehend = false;
 
     loop {
         herzschlag.store(jetzt_ms(), Ordering::Relaxed);
@@ -230,12 +340,20 @@ fn run() -> Result<(), String> {
                 state = xkb_state(km)?;
             }
         }
+        // Fortsetzen erst, wenn keine Taste mehr gedrückt ist (sonst bleiben z. B. Mod+Alt hängen)
+        if greifen_ausstehend && gedrueckt.is_empty() {
+            for g in &griffe {
+                let _ = greifen(g, true);
+            }
+            greifen_ausstehend = false;
+            pausiert = false;
+        }
         if letzte_pruefung.elapsed() > Duration::from_secs(1) {
             letzte_pruefung = Instant::now();
-            let zeit = std::fs::metadata(&o.stand).and_then(|m| m.modified()).ok();
+            let zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
             if zeit != stand_zeit {
                 stand_zeit = zeit;
-                engine.stand(stand_laden(&o.stand));
+                engine.stand(stand_laden(&pfade.stand));
             }
         }
 
@@ -253,15 +371,77 @@ fn run() -> Result<(), String> {
                 engine.fokus(app.as_deref());
                 continue;
             }
+            Ereignis::Sync(sync::Meldung::Verbindung(v)) => {
+                verbindung = v;
+                continue;
+            }
+            Ereignis::Sync(sync::Meldung::Stand(s)) => {
+                engine.stand(s);
+                stand_zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
+                continue;
+            }
+            Ereignis::Steuerung(befehl, antwort) => {
+                let text = match befehl.as_str() {
+                    "pause" if pausiert || greifen_ausstehend => {
+                        greifen_ausstehend = true;
+                        "aktiv".to_string()
+                    }
+                    "pause" => {
+                        // Tasten, die über die Weitergabe gedrückt sind, dort loslassen, sonst hängen sie im Compositor
+                        if let Some(w) = &mut weitergabe {
+                            for k in weitergegeben.drain() {
+                                let _ = w.emit(&[InputEvent::new(EventType::KEY.0, k.code(), 0)]);
+                            }
+                        }
+                        for g in &griffe {
+                            let _ = greifen(g, false);
+                        }
+                        engine.eingabe(Eingabe::Zuruecksetzen);
+                        pausiert = true;
+                        "pausiert".to_string()
+                    }
+                    "status" => {
+                        let server = Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_else(|| "–".into());
+                        format!(
+                            "Zustand: {} · Verbindung: {verbindung} · Bausteine: {} · Server: {server}",
+                            if pausiert || greifen_ausstehend { "pausiert" } else { "aktiv" },
+                            engine.anzahl()
+                        )
+                    }
+                    _ => "unbekannter Befehl".to_string(),
+                };
+                let _ = antwort.send(text);
+                continue;
+            }
             Ereignis::Taste { key, wert } => (key, wert),
         };
         if test_haengen {
             std::thread::sleep(Duration::from_secs(10));
         }
         let kc = xkb::Keycode::new(key.code() as u32 + 8);
-        let weiter = |w: &mut Option<VirtualDevice>, wert: i32| {
-            if let Some(w) = w {
+        // Während der Pause kommen die Tasten ohnehin beim Compositor an: nur mitzählen, nichts weitergeben
+        if pausiert || greifen_ausstehend {
+            match wert {
+                0 => {
+                    gedrueckt.remove(&key);
+                    state.update_key(kc, xkb::KeyDirection::Up);
+                }
+                1 => {
+                    gedrueckt.insert(key);
+                    state.update_key(kc, xkb::KeyDirection::Down);
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let mut weiter = |wert: i32| {
+            if let Some(w) = &mut weitergabe {
                 let _ = w.emit(&[InputEvent::new(EventType::KEY.0, key.code(), wert)]);
+                match wert {
+                    1 => weitergegeben.insert(key),
+                    0 => weitergegeben.remove(&key),
+                    _ => false,
+                };
             }
         };
 
@@ -270,14 +450,14 @@ fn run() -> Result<(), String> {
                 gedrueckt.remove(&key);
                 state.update_key(kc, xkb::KeyDirection::Up);
                 if !zurueckgehalten.remove(&key) {
-                    weiter(&mut weitergabe, 0);
+                    weiter(0);
                 }
             }
             2 => {
                 // gehaltene Taste: das Programm wiederholt nach eigenem Takt, Puffer ist dann unzuverlässig
                 engine.eingabe(Eingabe::Zuruecksetzen);
                 if !zurueckgehalten.contains(&key) {
-                    weiter(&mut weitergabe, 2);
+                    weiter(2);
                 }
             }
             _ => {
@@ -290,7 +470,7 @@ fn run() -> Result<(), String> {
                 state.update_key(kc, xkb::KeyDirection::Down);
                 let entscheidung = eingabe.map_or(Entscheidung::Durchlassen, |e| engine.eingabe(e));
                 match entscheidung {
-                    Entscheidung::Durchlassen => weiter(&mut weitergabe, 1),
+                    Entscheidung::Durchlassen => weiter(1),
                     Entscheidung::Ersetzen { loeschen, aktionen } => {
                         zurueckgehalten.insert(key);
                         if o.trocken {

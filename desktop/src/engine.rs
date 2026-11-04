@@ -81,6 +81,10 @@ impl Engine {
         self.ausgeschlossen = app_id.is_some_and(|a| self.ausschluesse.contains(&a.to_lowercase()));
     }
 
+    pub fn anzahl(&self) -> usize {
+        self.bausteine.len()
+    }
+
     pub fn puffer_laenge(&self) -> usize {
         self.puffer.0.len()
     }
