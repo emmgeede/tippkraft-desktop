@@ -96,15 +96,19 @@ pub(crate) struct Farben {
     pub muted: egui::Color32,
     pub border: egui::Color32,
     pub accent: egui::Color32,
+    /// Füllung für Knöpfe mit weißer Schrift (accent-600, Kontrast über 4,5:1)
+    pub knopf: egui::Color32,
     pub flaeche: egui::Color32,
 }
 
+// Palette wie im Webtool (F16): Grautöne stone, Akzentskala aus #d9480f
 pub(crate) fn farben(dunkel: bool) -> Farben {
     use egui::Color32 as C;
+    const KNOPF: C = C::from_rgb(0xc0, 0x3d, 0x0c);
     if dunkel {
-        Farben { bg: C::from_rgb(0x16, 0x16, 0x16), fg: C::from_rgb(0xee, 0xee, 0xee), muted: C::from_rgb(0x99, 0x99, 0x99), border: C::from_rgb(0x33, 0x33, 0x33), accent: C::from_rgb(0xff, 0x7a, 0x3d), flaeche: C::from_rgb(0x22, 0x22, 0x22) }
+        Farben { bg: C::from_rgb(0x1c, 0x19, 0x17), fg: C::from_rgb(0xf5, 0xf5, 0xf4), muted: C::from_rgb(0xa8, 0xa2, 0x9e), border: C::from_rgb(0x44, 0x40, 0x3c), accent: C::from_rgb(0xff, 0x7a, 0x3d), knopf: KNOPF, flaeche: C::from_rgb(0x29, 0x25, 0x24) }
     } else {
-        Farben { bg: C::WHITE, fg: C::from_rgb(0x1a, 0x1a, 0x1a), muted: C::from_rgb(0x66, 0x66, 0x66), border: C::from_rgb(0xdd, 0xdd, 0xdd), accent: C::from_rgb(0xd9, 0x48, 0x0f), flaeche: C::from_rgb(0xf6, 0xf4, 0xf2) }
+        Farben { bg: C::WHITE, fg: C::from_rgb(0x1c, 0x19, 0x17), muted: C::from_rgb(0x78, 0x71, 0x6c), border: C::from_rgb(0xe7, 0xe5, 0xe4), accent: KNOPF, knopf: KNOPF, flaeche: C::from_rgb(0xf5, 0xf5, 0xf4) }
     }
 }
 
@@ -221,7 +225,7 @@ impl eframe::App for App {
                                 let text = if o.is_empty() { tr(T::PopupNichts) } else { o.as_str() };
                                 // Pill-Buttons wie die Gruppen im Webtool: gewählt = Akzentfläche
                                 let knopf = egui::Button::new(RichText::new(text).color(if gewaehlt { egui::Color32::WHITE } else { f.fg }))
-                                    .fill(if gewaehlt { f.accent } else { f.bg })
+                                    .fill(if gewaehlt { f.knopf } else { f.bg })
                                     .stroke(egui::Stroke::new(if aktiv && gewaehlt { 2.0 } else { 1.0 }, if gewaehlt { f.accent } else { f.border }))
                                     .corner_radius(egui::CornerRadius::same(255));
                                 if ui.add(knopf).clicked() {
@@ -243,7 +247,7 @@ impl eframe::App for App {
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
-                let primaer = egui::Button::new(RichText::new(tr(T::PopupEinfuegen)).color(egui::Color32::WHITE)).fill(f.accent).stroke(egui::Stroke::NONE);
+                let primaer = egui::Button::new(RichText::new(tr(T::PopupEinfuegen)).color(egui::Color32::WHITE)).fill(f.knopf).stroke(egui::Stroke::NONE);
                 if ui.add(primaer).clicked() {
                     einfuegen = true;
                 }
