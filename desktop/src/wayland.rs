@@ -188,10 +188,19 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Zustand {
 mod tests {
     use super::*;
 
+    /// Keysym-Name ohne führende Nullen bei Unicode-Namen (ältere libxkbcommon: "U0001F642", neuere: "U1F642")
+    fn name(s: xkb::Keysym) -> String {
+        let n = xkb::keysym_get_name(s);
+        match n.strip_prefix('U').and_then(|h| u32::from_str_radix(h, 16).ok()) {
+            Some(cp) => format!("U{cp:X}"),
+            None => n,
+        }
+    }
+
     #[test]
     fn tastenfolge_mit_umlauten_emoji_und_tokens() {
         let f = tastenfolge(2, &[Aktion::Text("ä€🙂\n".into()), Aktion::Taste(Taste::Tab, 2)]);
-        let namen: Vec<String> = f.iter().map(|s| xkb::keysym_get_name(*s)).collect();
+        let namen: Vec<String> = f.iter().map(|s| name(*s)).collect();
         assert_eq!(namen, ["BackSpace", "BackSpace", "adiaeresis", "EuroSign", "U1F642", "Return", "Tab", "Tab"]);
     }
 
@@ -207,8 +216,8 @@ mod tests {
         let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         let km = xkb::Keymap::new_from_string(&ctx, keymap_text(&uniq), xkb::KEYMAP_FORMAT_TEXT_V1, xkb::KEYMAP_COMPILE_NO_FLAGS).expect("Keymap kompiliert nicht");
         let st = xkb::State::new(&km);
-        let g = uniq.iter().position(|s| xkb::keysym_get_name(*s) == "G").unwrap() as u32;
-        let emoji = uniq.iter().position(|s| xkb::keysym_get_name(*s) == "U1F642").unwrap() as u32;
+        let g = uniq.iter().position(|s| name(*s) == "G").unwrap() as u32;
+        let emoji = uniq.iter().position(|s| name(*s) == "U1F642").unwrap() as u32;
         assert_eq!(st.key_get_utf8(xkb::Keycode::new(g + 9)), "G");
         assert_eq!(st.key_get_utf8(xkb::Keycode::new(emoji + 9)), "🙂");
     }
