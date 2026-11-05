@@ -20,6 +20,12 @@ if ! id -nG | tr ' ' '\n' | grep -qx input; then
 Run:   sudo usermod -aG input \"\$USER\"
 then log out and back in and run this installer again."
 fi
+if [ ! -w /dev/uinput ]; then
+  fail "tippkraft cannot write to /dev/uinput, which it needs to type text. Run:
+echo 'KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' | sudo tee /etc/udev/rules.d/60-tippkraft-uinput.rules
+sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
+then run this installer again."
+fi
 command -v curl >/dev/null 2>&1 || fail "curl is missing."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is missing."
 
