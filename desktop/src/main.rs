@@ -120,9 +120,17 @@ fn verbinden(pfade: &Pfade, args: &[String]) -> Result<(), String> {
     }
 }
 
+const RELEASES: &str = "https://github.com/emmgeede/tippkraft-desktop/releases/latest";
+const INSTALLIEREN: &str = "curl -fsSL https://tippkraft.com/install.sh | sh";
+
 fn status(pfade: &Pfade) -> Result<(), String> {
     let antwort = steuerung::senden(&pfade.socket, "status").ok_or(tr(T::LaeuftNicht))?;
     println!("{antwort}");
+    // F21 AC-8: Hinweis aus dem zuletzt geladenen Stand
+    let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok());
+    if let Some(v) = stand.and_then(|s| s.desktop_version).filter(|v| format::neuer(v, env!("CARGO_PKG_VERSION"))) {
+        println!("{}", i18n::f(i18n::aktuell(), T::UpdateStatus, &[&v, &INSTALLIEREN]));
+    }
     Ok(())
 }
 
@@ -392,7 +400,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
         use ksni::blocking::TrayMethods;
         let tx = tx.clone();
         let t = tippkraft::tray::Tray {
-            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new(), sprache: i18n::aktuell() },
+            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new(), sprache: i18n::aktuell(), update: None },
             senden: Box::new(move |a| drop(tx.send(Ereignis::Tray(a)))),
         };
         // Dienst startet oft vor der DMS-Leiste: dann warten, bis der Watcher da ist, statt aufzugeben
@@ -422,6 +430,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
     let mut zurueckgehalten: HashSet<KeyCode> = HashSet::new();
     let mut letzte_pruefung = Instant::now();
     let mut verbindung = Verbindung::NichtAngemeldet;
+    let mut update: Option<String> = None; // F21: neuere Version laut Server
     let mut pausiert = false;
     let mut greifen_ausstehend = false;
 
@@ -449,6 +458,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 anzahl: engine.anzahl(),
                 server: Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_default(),
                 sprache: i18n::aktuell(),
+                update: update.clone(),
             };
             if tray_zustand.as_ref() != Some(&z) {
                 t.update(|t| t.zustand = z.clone());
@@ -486,6 +496,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             }
             Ereignis::Sync(sync::Meldung::Stand(s)) => {
                 i18n::setzen(Sprache::fuer(s.sprache.as_deref()));
+                update = s.desktop_version.clone().filter(|v| tippkraft::format::neuer(v, env!("CARGO_PKG_VERSION")));
                 engine.stand(s);
                 stand_zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
                 continue;
@@ -537,6 +548,10 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                         let url = Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_else(|| sync::STANDARD_SERVER.into());
                         let browser = std::env::var("TIPPKRAFT_BROWSER").unwrap_or_else(|_| "xdg-open".into());
                         let _ = std::process::Command::new(browser).arg(url).spawn();
+                    }
+                    TrayAktion::Update => {
+                        let browser = std::env::var("TIPPKRAFT_BROWSER").unwrap_or_else(|_| "xdg-open".into());
+                        let _ = std::process::Command::new(browser).arg(RELEASES).spawn();
                     }
                     TrayAktion::Uebersicht => {
                         if let Ok(exe) = std::env::current_exe() {

@@ -34,12 +34,24 @@ pub struct Stand {
     /// Sprache des Accounts (F15), fehlt bei älteren Servern
     #[serde(default)]
     pub sprache: Option<String>,
+    /// Neueste Desktop-Version laut Server (F21), fehlt, wenn unbekannt
+    #[serde(default, rename = "desktopVersion")]
+    pub desktop_version: Option<String>,
     pub bausteine: Vec<Baustein>,
     pub ausschluesse: Vec<String>,
 }
 
 fn wahr() -> bool {
     true
+}
+
+/// true, wenn `verfuegbar` (z. B. "v0.2.0" oder "0.2.0") neuer ist als `laufend` (F21 AC-8)
+pub fn neuer(verfuegbar: &str, laufend: &str) -> bool {
+    let teile = |v: &str| -> Option<Vec<u64>> { v.trim().trim_start_matches('v').split('.').map(|x| x.parse().ok()).collect() };
+    match (teile(verfuegbar), teile(laufend)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
 }
 
 pub fn parse(json: &str) -> Result<Stand, String> {
@@ -254,6 +266,17 @@ mod tests {
         let s = parse(r#"{"version":1,"bausteine":[{"kuerzel":"a","inhalt":"b","ausloeser":"tab","wortgrenze":true,"grossKleinBeachten":false,"schreibweiseUebernehmen":true}],"ausschluesse":[]}"#).unwrap();
         assert!(s.bausteine[0].aktiv);
         assert_eq!(s.bausteine[0].bezeichnung, None);
+    }
+
+    #[test]
+    fn vergleicht_versionen_f21_ac8() {
+        assert!(neuer("v0.2.0", "0.1.0"));
+        assert!(neuer("0.10.0", "0.9.3"));
+        assert!(!neuer("0.1.0", "0.1.0"));
+        assert!(!neuer("v0.1.0", "0.2.0"));
+        assert!(!neuer("kaputt", "0.1.0"));
+        let s = parse(r#"{"version":2,"desktopVersion":"v0.3.1","bausteine":[],"ausschluesse":[]}"#).unwrap();
+        assert_eq!(s.desktop_version.as_deref(), Some("v0.3.1"));
     }
 
     #[test]

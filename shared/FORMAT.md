@@ -10,6 +10,7 @@ Der Server liefert diesen Stand über `GET /api/sync/snapshot` und als Ereignis 
 |---|---|---|
 | `version` | Zahl | Formatversion, aktuell `2`. Der Desktop liest 1 und 2 und lehnt unbekannte ab (behält dann seinen letzten Stand) |
 | `sprache` | `"en"` \| `"de"` | Ab F15 (Version 2, optional). Sprache des Accounts für Tray, Popup, Übersicht, Meldungen und Datumsformat. Fehlt sie, gilt die Systemsprache |
+| `desktopVersion` | Text | Ab F21 (Version 2, optional). Neueste veröffentlichte Desktop-Version, z. B. `0.2.0`. Ist sie neuer als die laufende, zeigt der Desktop einen Update-Hinweis. Fehlt sie, gibt es keinen Hinweis |
 | `bausteine` | Liste | Alle Bausteine des Nutzers, sortiert nach `lower(kuerzel)` in Zeichencode-Reihenfolge. Auslösen dürfen nur die mit `aktiv: true` |
 | `bausteine[].aktiv` | bool | Ab Version 2. `true`: Baustein aktiv und Gruppe aktiv oder keine. Fehlt (Version 1): `true` |
 | `bausteine[].bezeichnung` | Text oder `null` | Ab Version 2, für die Übersicht (F14). Fehlt (Version 1): `null` |

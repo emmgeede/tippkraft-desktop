@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn aktive_zuerst_dann_deaktivierte_f14_ac4() {
-        let stand = Stand { sprache: None, version: 2, bausteine: vec![b("alt", "x", None, false), b("Mfg", "y", None, true), b("adr", "z", Some("Adresse"), true)], ausschluesse: vec![] };
+        let stand = Stand { sprache: None, desktop_version: None, version: 2, bausteine: vec![b("alt", "x", None, false), b("Mfg", "y", None, true), b("adr", "z", Some("Adresse"), true)], ausschluesse: vec![] };
         let e = eintraege(&stand, Sprache::De);
         assert_eq!(e.iter().map(|x| (x.kuerzel.as_str(), x.aktiv)).collect::<Vec<_>>(), [("adr", true), ("Mfg", true), ("alt", false)]);
         assert_eq!(e[0].ausloeser, "Leertaste");
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn nur_einzeiliger_auszug_wie_im_webtool() {
-        let e = eintraege_de(&Stand { sprache: None, version: 2, bausteine: vec![b("a", "eins\n\n  zwei\ndrei", None, true), b("l", &"x".repeat(20_000), None, true)], ausschluesse: vec![] });
+        let e = eintraege_de(&Stand { sprache: None, desktop_version: None, version: 2, bausteine: vec![b("a", "eins\n\n  zwei\ndrei", None, true), b("l", &"x".repeat(20_000), None, true)], ausschluesse: vec![] });
         assert_eq!(e[0].vorschau, "eins zwei drei");
         assert_eq!(e[1].vorschau, format!("{}…", "x".repeat(80)));
     }
@@ -198,6 +198,7 @@ mod tests {
     fn filter_ueber_kuerzel_bezeichnung_inhalt_f14_ac5() {
         let e = eintraege_de(&Stand {
             sprache: None,
+            desktop_version: None,
             version: 2,
             bausteine: vec![b("mfg", "Mit freundlichen Grüßen", None, true), b("adr", "Musterstraße", Some("Adresse"), true), b("sig", "Viele GRÜSSE", None, false)],
             ausschluesse: vec![],

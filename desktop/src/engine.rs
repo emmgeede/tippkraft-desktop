@@ -293,7 +293,7 @@ mod tests {
     }
 
     fn engine(bausteine: Vec<Baustein>) -> Engine {
-        Engine::new(Stand { sprache: None, version: 1, bausteine, ausschluesse: vec!["org.keepassxc.KeePassXC".into()] })
+        Engine::new(Stand { sprache: None, desktop_version: None, version: 1, bausteine, ausschluesse: vec!["org.keepassxc.KeePassXC".into()] })
     }
 
     /// Tippt einen Text Zeichen für Zeichen (' ' als Leertaste) und liefert die Entscheidungen
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn neuer_stand_ersetzt_bausteine() {
         let mut e = engine(vec![]);
-        e.stand(Stand { sprache: None, version: 1, bausteine: vec![b("mfg", "x", Ausloeser::Leertaste)], ausschluesse: vec![] });
+        e.stand(Stand { sprache: None, desktop_version: None, version: 1, bausteine: vec![b("mfg", "x", Ausloeser::Leertaste)], ausschluesse: vec![] });
         assert_eq!(tippe(&mut e, "mfg ").last(), Some(&ersetzt(3, "x")));
     }
 

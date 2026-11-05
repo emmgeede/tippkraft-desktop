@@ -10,6 +10,8 @@ pub struct TrayZustand {
     pub anzahl: usize,
     pub server: String,
     pub sprache: Sprache,
+    /// Neuere Version, falls verfügbar (F21)
+    pub update: Option<String>,
 }
 
 fn verbindung_kurz(s: Sprache, v: Verbindung) -> &'static str {
@@ -98,6 +100,7 @@ pub enum TrayAktion {
     Uebersicht,
     Webtool,
     Verbinden,
+    Update,
     Beenden,
 }
 
@@ -132,8 +135,11 @@ impl ksni::Tray for Tray {
             StandardItem { label: label.into(), activate: Box::new(move |t: &mut Self| (t.senden)(aktion)), ..Default::default() }.into()
         };
         let s = self.zustand.sprache;
-        vec![
-            StandardItem { label: statuszeile(&self.zustand), enabled: false, ..Default::default() }.into(),
+        let mut kopf: Vec<ksni::MenuItem<Self>> = vec![StandardItem { label: statuszeile(&self.zustand), enabled: false, ..Default::default() }.into()];
+        if let Some(v) = &self.zustand.update {
+            kopf.push(eintrag(&crate::i18n::f(s, T::TrayUpdate, &[v]), TrayAktion::Update));
+        }
+        kopf.into_iter().chain(vec![
             ksni::MenuItem::Separator,
             eintrag(text(s, if self.zustand.pausiert { T::TrayFortsetzen } else { T::TrayPausieren }), TrayAktion::Pause),
             eintrag(text(s, T::TrayUebersicht), TrayAktion::Uebersicht),
@@ -141,7 +147,8 @@ impl ksni::Tray for Tray {
             eintrag(text(s, T::TrayNeuVerbinden), TrayAktion::Verbinden),
             ksni::MenuItem::Separator,
             eintrag(text(s, T::TrayBeenden), TrayAktion::Beenden),
-        ]
+        ])
+        .collect()
     }
 }
 
@@ -150,7 +157,7 @@ mod tests {
     use super::*;
 
     fn z(pausiert: bool, verbindung: Verbindung) -> TrayZustand {
-        TrayZustand { pausiert, verbindung, anzahl: 3, server: "http://localhost:4321".into(), sprache: Sprache::De }
+        TrayZustand { pausiert, verbindung, anzahl: 3, server: "http://localhost:4321".into(), sprache: Sprache::De, update: None }
     }
 
     /// ARGB eines Pixels
