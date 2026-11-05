@@ -12,13 +12,13 @@ Requirements: Linux x86_64, a Wayland session (Niri, Sway or Hyprland), your use
 curl -fsSL https://tippkraft.com/install.sh | sh
 ```
 
-The script downloads the latest release from this repository, verifies its SHA-256 checksum and runs `tippkraft einrichten`. That copies tippkraft to `~/.local/bin`, sets up a systemd user service and opens your browser to connect the app to your tippkraft account. Running it again updates tippkraft. The script never uses sudo, you can [read it here](install.sh).
+The script downloads the latest release from this repository, verifies its SHA-256 checksum and runs `tippkraft setup`. That copies tippkraft to `~/.local/bin`, sets up a systemd user service and opens your browser to connect the app to your tippkraft account. Running it again updates tippkraft. The script never uses sudo, you can [read it here](install.sh).
 
 ## Use
 
 - `tippkraft status` shows state, connection and whether an update is available.
 - `tippkraft pause` pauses or resumes. Emergency stop: left Ctrl + left Alt + Backspace.
-- `tippkraft verbinden` connects the app to your account again.
+- `tippkraft connect` connects the app to your account again.
 - Tray icon: left click pauses, middle click shows all snippets.
 
 ## What it does with your keyboard
@@ -33,7 +33,7 @@ The script downloads the latest release from this repository, verifies its SHA-2
 ```sh
 cd desktop
 cargo build --release
-./target/release/tippkraft einrichten
+./target/release/tippkraft setup
 ```
 
 Needs Rust and `libxkbcommon`. Tests: `cargo test` (integration tests create a virtual keyboard via `/dev/uinput`).

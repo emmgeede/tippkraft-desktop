@@ -191,7 +191,7 @@ fn einrichten() -> Result<(), String> {
     std::fs::write(&starter_start, "[Desktop Entry]\nType=Application\nName=Start tippkraft\nName[de]=tippkraft starten\nComment=Start the text expander\nComment[de]=Textexpander starten\nExec=systemctl --user start tippkraft.service\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n").map_err(|e| e.to_string())?;
     let starter = home.join(".local/share/applications/tippkraft-verbinden.desktop");
     std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} verbinden\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
+    std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} connect\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
     println!("{}", i18n::f(i18n::aktuell(), T::Eingerichtet, &[&ziel.display()]));
     // F22 AC-5: Tastenkürzel für den laufenden Compositor zum Kopieren
     if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
@@ -564,12 +564,12 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                     }
                     TrayAktion::Uebersicht => {
                         if let Ok(exe) = std::env::current_exe() {
-                            let _ = std::process::Command::new(exe).arg("uebersicht").spawn();
+                            let _ = std::process::Command::new(exe).arg("overview").spawn();
                         }
                     }
                     TrayAktion::Verbinden => {
                         if let Ok(exe) = std::env::current_exe() {
-                            let _ = std::process::Command::new(exe).arg("verbinden").spawn();
+                            let _ = std::process::Command::new(exe).arg("connect").spawn();
                         }
                     }
                     TrayAktion::Beenden => {

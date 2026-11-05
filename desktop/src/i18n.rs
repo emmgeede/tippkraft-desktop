@@ -125,11 +125,11 @@ pub fn text(s: Sprache, t: T) -> &'static str {
 Emergency stop: left Ctrl + left Alt + Backspace quits tippkraft immediately.",
             "tippkraft – Textexpander für Wayland
 
-  tippkraft einrichten   Installieren, Autostart einrichten, starten und mit dem Konto verbinden
-  tippkraft verbinden    Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
+  tippkraft setup        Installieren, Autostart einrichten, starten und mit dem Konto verbinden
+  tippkraft connect      Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
   tippkraft status       Zustand anzeigen
   tippkraft pause        Pausieren bzw. fortsetzen (gibt die Tastatur frei)
-  tippkraft uebersicht   Alle Bausteine anzeigen und filtern (Mod+Alt+Leertaste)
+  tippkraft overview     Alle Bausteine anzeigen und filtern (Mod+Alt+Leertaste)
   tippkraft run [--verzoegerung MS] [--stand DATEI] [--geraet /dev/input/eventN] [--trocken]
 
 Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
@@ -174,8 +174,8 @@ Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
         BitteHttps => ("Please use https, otherwise the token is sent unencrypted", "Bitte https verwenden, sonst geht der Token unverschlüsselt übers Netz"),
         UrlSchema => ("URL needs http:// or https://", "URL braucht http:// oder https://"),
         Eingerichtet => ("Set up: {0} and tippkraft.service is running.", "Eingerichtet: {0} und tippkraft.service läuft."),
-        SchonVerbunden => ("Already connected. Reconnect: “tippkraft verbinden” in the app launcher.", "Schon verbunden. Neu verbinden: „tippkraft verbinden“ im App-Starter."),
-        LoginWeg => ("`login` no longer exists. Connecting now works through the browser: tippkraft connect", "`login` gibt es nicht mehr. Verbinden geht jetzt über den Browser: tippkraft verbinden"),
+        SchonVerbunden => ("Already connected. Reconnect: “Connect tippkraft” in the app launcher or `tippkraft connect`.", "Schon verbunden. Neu verbinden: „tippkraft verbinden“ im App-Starter oder `tippkraft connect`."),
+        LoginWeg => ("`login` no longer exists. Connecting now works through the browser: tippkraft connect", "`login` gibt es nicht mehr. Verbinden geht jetzt über den Browser: tippkraft connect"),
         PopupBaustein => ("Snippet", "Baustein"),
         PopupVorschau => ("Preview", "Vorschau"),
         PopupEinfuegen => ("Insert", "Einfügen"),
@@ -187,7 +187,7 @@ Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
         UebVonN => ("{0} of {1}", "{0} von {1}"),
         UebSuchen => ("Search …", "Suchen …"),
         UebKeineTreffer => ("No matches.", "Keine Treffer."),
-        UebLeer => ("No snippets yet. Connect tippkraft via “tippkraft verbinden”.", "Noch keine Bausteine. Verbinde tippkraft über „tippkraft verbinden“."),
+        UebLeer => ("No snippets yet. Connect tippkraft via `tippkraft connect`.", "Noch keine Bausteine. Verbinde tippkraft über `tippkraft connect`."),
         UebLoestNicht => ("does not trigger", "löst nicht aus"),
         AuslSofort => ("Immediately", "Sofort"),
         AuslLeertaste => ("Space", "Leertaste"),

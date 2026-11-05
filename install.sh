@@ -1,6 +1,6 @@
 #!/bin/sh
 # tippkraft installer: https://github.com/emmgeede/tippkraft-desktop
-# Downloads the latest release, verifies its SHA-256 checksum and runs `tippkraft einrichten`.
+# Downloads the latest release, verifies its SHA-256 checksum and runs `tippkraft setup`.
 # It never runs sudo.
 set -eu
 
@@ -38,4 +38,4 @@ curl -fsSL -o "$tmp/$ASSET.sha256" "$BASE/$ASSET.sha256"
 (cd "$tmp" && sha256sum -c --quiet "$ASSET.sha256") || fail "checksum mismatch, nothing was installed."
 
 chmod +x "$tmp/$ASSET"
-"$tmp/$ASSET" einrichten
+"$tmp/$ASSET" setup
