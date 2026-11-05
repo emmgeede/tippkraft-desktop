@@ -1,9 +1,12 @@
 pub mod engine;
+pub mod fokus;
 pub mod format;
+pub mod hyprland;
 pub mod i18n;
 pub mod niri;
 pub mod popup;
 pub mod steuerung;
+pub mod sway;
 pub mod sync;
 pub mod tray;
 pub mod uebersicht;

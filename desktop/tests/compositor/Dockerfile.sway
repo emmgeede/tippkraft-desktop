@@ -1,0 +1,9 @@
+# F22: Sway ohne Bildschirm für den Fokus-Test (lokal). In CI läuft sway.sh direkt auf Ubuntu.
+FROM fedora:44
+RUN dnf install -y --setopt=install_weak_deps=False sway foot dejavu-sans-mono-fonts libcap && dnf clean all \
+ # Echtzeit-Capability entfernen, sonst darf ein normaler Nutzer im Container sway nicht starten
+ && setcap -r /usr/bin/sway
+RUN useradd -m tester
+USER tester
+WORKDIR /home/tester
+ENTRYPOINT ["/test/sway.sh", "/test/tippkraft"]

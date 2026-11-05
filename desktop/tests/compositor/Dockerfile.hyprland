@@ -1,0 +1,5 @@
+# F22: Hyprland verschachtelt in der Wayland-Sitzung des Hosts (lokal, braucht /dev/dri).
+# Start siehe tests/compositor/README.md
+FROM archlinux:latest
+RUN pacman -Syu --noconfirm hyprland foot ttf-dejavu mesa && pacman -Scc --noconfirm
+ENTRYPOINT ["/test/hyprland.sh", "/test/tippkraft"]

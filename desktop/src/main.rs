@@ -17,7 +17,7 @@ use tippkraft::format::Aktion;
 use tippkraft::format::{self, Stand};
 use tippkraft::sync::{self, Pfade, Verbindung, Zugang};
 use tippkraft::i18n::{self, Sprache, T, tr};
-use tippkraft::{niri, steuerung, wayland};
+use tippkraft::{steuerung, wayland};
 use xkbcommon::xkb;
 
 const WATCHDOG: Duration = Duration::from_secs(2);
@@ -47,6 +47,15 @@ fn main() {
         Some("pause") => pause(&pfade),
         Some("einrichten" | "setup") => einrichten(),
         Some("popup") => popup(),
+        // F22: zeigt jeden erkannten Fensterwechsel (Fehlersuche, Container-Tests)
+        Some("fokus") => {
+            tippkraft::fokus::dauerhaft(|app| {
+                use std::io::Write;
+                println!("fokus: {}", app.as_deref().unwrap_or("-"));
+                let _ = std::io::stdout().flush();
+            });
+            Ok(())
+        }
         Some("uebersicht" | "overview") => {
             let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok()).unwrap_or_default();
             tippkraft::uebersicht::zeigen(stand, &pfade.socket.with_file_name("tippkraft-uebersicht.lock"))
@@ -184,6 +193,11 @@ fn einrichten() -> Result<(), String> {
     std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} verbinden\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
     println!("{}", i18n::f(i18n::aktuell(), T::Eingerichtet, &[&ziel.display()]));
+    // F22 AC-5: Tastenkürzel für den laufenden Compositor zum Kopieren
+    if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
+        let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string());
+        println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
+    }
     let pfade = Pfade::aus_umgebung();
     if Zugang::laden(&pfade.zugang).is_some() {
         println!("{}", tr(T::SchonVerbunden));
@@ -381,13 +395,8 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
 
     if o.geraete.is_empty() {
         let tx = tx.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = niri::beobachten(|app| {
-                let _ = tx.send(Ereignis::Fokus(app));
-            }) {
-                eprintln!("tippkraft: {e}, Ausschlussliste ist ohne Wirkung");
-            }
-        });
+        // F22: Niri, Sway oder Hyprland, mit Neuverbindung
+        std::thread::spawn(move || tippkraft::fokus::dauerhaft(|app| drop(tx.send(Ereignis::Fokus(app)))));
     }
     {
         let tx = tx.clone();

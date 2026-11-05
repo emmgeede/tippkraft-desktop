@@ -48,9 +48,8 @@ impl Fokus {
 }
 
 /// Liest den Event-Stream und ruft `melden` bei jedem Fokuswechsel auf. Kehrt nur bei Fehlern zurück.
-pub fn beobachten(mut melden: impl FnMut(Option<String>)) -> Result<(), String> {
-    let pfad = std::env::var("NIRI_SOCKET").map_err(|_| "NIRI_SOCKET nicht gesetzt".to_string())?;
-    let mut sock = UnixStream::connect(&pfad).map_err(|e| format!("Niri-IPC nicht erreichbar: {e}"))?;
+pub fn beobachten(pfad: &str, melden: &mut dyn FnMut(Option<String>)) -> Result<(), String> {
+    let mut sock = UnixStream::connect(pfad).map_err(|e| format!("Niri-IPC nicht erreichbar: {e}"))?;
     sock.write_all(b"\"EventStream\"\n").map_err(|e| e.to_string())?;
     let mut fokus = Fokus::default();
     for zeile in BufReader::new(sock).lines() {
