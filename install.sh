@@ -14,7 +14,7 @@ fail() {
 
 [ "$(uname -s)" = "Linux" ] || fail "tippkraft only runs on Linux."
 [ "$(uname -m)" = "x86_64" ] || fail "only x86_64 is supported for now (this machine is $(uname -m))."
-[ -n "${WAYLAND_DISPLAY:-}" ] || fail "no Wayland session found. tippkraft needs Wayland (Niri today, Sway and Hyprland next)."
+[ -n "${WAYLAND_DISPLAY:-}" ] || fail "no Wayland session found. tippkraft needs Wayland (Niri, Sway or Hyprland)."
 if ! id -nG | tr ' ' '\n' | grep -qx input; then
   fail "your user is not in the 'input' group, which tippkraft needs to read the keyboard.
 Run:   sudo usermod -aG input \"\$USER\"
