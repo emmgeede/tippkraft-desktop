@@ -8,9 +8,9 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    # ältere glibc, damit die Binärdatei auf verbreiteten Distributionen läuft
-    runs-on: ubuntu-22.04
+  test:
+    # Tests mit aktueller libxkbcommon (ältere Versionen benennen Keysyms anders, zur Laufzeit gilt die des Nutzers)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Tag passt zur Version in Cargo.toml
@@ -20,6 +20,15 @@ jobs:
       - name: Tests (ohne Geräte, die Integrationstests brauchen /dev/uinput)
         working-directory: desktop
         run: cargo test --release --locked --lib
+
+  release:
+    needs: test
+    # ältere glibc, damit die Binärdatei auf verbreiteten Distributionen läuft
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
       - name: Bauen
         working-directory: desktop
         run: cargo build --release --locked
