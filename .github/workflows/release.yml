@@ -40,20 +40,32 @@ jobs:
 
   release:
     needs: [test, sway]
-    if: startsWith(github.ref, 'refs/tags/')
+    # Tag-Push oder neue Version in Cargo.toml auf main: dann legt der Workflow Tag und Release selbst an
+    if: github.event_name == 'push'
     # ältere glibc, damit die Binärdatei auf verbreiteten Distributionen läuft
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Version prüfen
+        id: v
+        run: |
+          tag="v$(grep -m1 '^version' desktop/Cargo.toml | cut -d'"' -f2)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] || [ -z "$(git ls-remote --tags origin "refs/tags/$tag")" ]; then echo "neu=true" >> "$GITHUB_OUTPUT"; else echo "neu=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.v.outputs.neu == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
+      - if: steps.v.outputs.neu == 'true'
+        uses: dtolnay/rust-toolchain@stable
       - name: Bauen
+        if: steps.v.outputs.neu == 'true'
         working-directory: desktop
         run: cargo build --release --locked
       - name: Release anlegen
+        if: steps.v.outputs.neu == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
         run: |
           cp desktop/target/release/tippkraft tippkraft-x86_64-linux
           sha256sum tippkraft-x86_64-linux > tippkraft-x86_64-linux.sha256
-          gh release create "$GITHUB_REF_NAME" tippkraft-x86_64-linux tippkraft-x86_64-linux.sha256 install.sh --title "tippkraft $GITHUB_REF_NAME" --generate-notes
+          gh release create "$TAG" tippkraft-x86_64-linux tippkraft-x86_64-linux.sha256 install.sh --target "$GITHUB_SHA" --title "tippkraft $TAG" --generate-notes
