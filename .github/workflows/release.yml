@@ -1,0 +1,32 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # ältere glibc, damit die Binärdatei auf verbreiteten Distributionen läuft
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag passt zur Version in Cargo.toml
+        run: test "v$(grep -m1 '^version' desktop/Cargo.toml | cut -d'"' -f2)" = "$GITHUB_REF_NAME"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tests (ohne Geräte, die Integrationstests brauchen /dev/uinput)
+        working-directory: desktop
+        run: cargo test --release --locked --lib
+      - name: Bauen
+        working-directory: desktop
+        run: cargo build --release --locked
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp desktop/target/release/tippkraft tippkraft-x86_64-linux
+          sha256sum tippkraft-x86_64-linux > tippkraft-x86_64-linux.sha256
+          gh release create "$GITHUB_REF_NAME" tippkraft-x86_64-linux tippkraft-x86_64-linux.sha256 install.sh --title "tippkraft $GITHUB_REF_NAME" --generate-notes
