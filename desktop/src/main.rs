@@ -395,7 +395,8 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new(), sprache: i18n::aktuell() },
             senden: Box::new(move |a| drop(tx.send(Ereignis::Tray(a)))),
         };
-        t.spawn().map_err(|e| eprintln!("tippkraft: kein Tray-Icon ({e})")).ok()
+        // Dienst startet oft vor der DMS-Leiste: dann warten, bis der Watcher da ist, statt aufzugeben
+        t.assume_sni_available(true).spawn().map_err(|e| eprintln!("tippkraft: kein Tray-Icon ({e})")).ok()
     } else {
         None
     };
