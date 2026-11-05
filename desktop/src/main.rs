@@ -195,7 +195,7 @@ fn einrichten() -> Result<(), String> {
     println!("{}", i18n::f(i18n::aktuell(), T::Eingerichtet, &[&ziel.display()]));
     // F22 AC-5: Tastenkürzel für den laufenden Compositor zum Kopieren
     if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
-        let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string());
+        let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string(), home.join(".config/hypr/hyprland.lua").exists());
         println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
     }
     let pfade = Pfade::aus_umgebung();

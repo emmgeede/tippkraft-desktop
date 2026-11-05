@@ -51,10 +51,12 @@ pub fn dauerhaft(mut melden: impl FnMut(Option<String>)) {
 }
 
 /// Zeilen für Pause (Mod+Alt+T) und Übersicht (Mod+Alt+Leertaste) im Format des Compositors (AC-5)
-pub fn tastenkuerzel(q: &Quelle, bin: &str) -> (&'static str, &'static str, String) {
+/// `hypr_lua`: Hyprland ab 0.57 legt `hyprland.lua` statt `hyprland.conf` an, mit eigener Schreibweise
+pub fn tastenkuerzel(q: &Quelle, bin: &str, hypr_lua: bool) -> (&'static str, &'static str, String) {
     match q {
         Quelle::Niri(_) => ("Niri", "~/.config/niri/config.kdl (binds { … })", format!("Mod+Alt+T {{ spawn \"{bin}\" \"pause\"; }}\nMod+Alt+Space {{ spawn \"{bin}\" \"uebersicht\"; }}")),
         Quelle::Sway(_) => ("Sway", "~/.config/sway/config", format!("bindsym $mod+Alt+t exec {bin} pause\nbindsym $mod+Alt+space exec {bin} uebersicht")),
+        Quelle::Hyprland(_) if hypr_lua => ("Hyprland", "~/.config/hypr/hyprland.lua", format!("hl.bind(\"SUPER + ALT + T\", hl.dsp.exec_cmd(\"{bin} pause\"))\nhl.bind(\"SUPER + ALT + SPACE\", hl.dsp.exec_cmd(\"{bin} uebersicht\"))")),
         Quelle::Hyprland(_) => ("Hyprland", "~/.config/hypr/hyprland.conf", format!("bind = SUPER ALT, T, exec, {bin} pause\nbind = SUPER ALT, SPACE, exec, {bin} uebersicht")),
     }
 }
@@ -79,10 +81,13 @@ mod tests {
 
     #[test]
     fn zeigt_tastenkuerzel_je_compositor_ac5() {
-        let (name, datei, zeilen) = tastenkuerzel(&Quelle::Sway("/s".into()), "/home/a/.local/bin/tippkraft");
+        let (name, datei, zeilen) = tastenkuerzel(&Quelle::Sway("/s".into()), "/home/a/.local/bin/tippkraft", false);
         assert_eq!((name, datei), ("Sway", "~/.config/sway/config"));
         assert_eq!(zeilen, "bindsym $mod+Alt+t exec /home/a/.local/bin/tippkraft pause\nbindsym $mod+Alt+space exec /home/a/.local/bin/tippkraft uebersicht");
-        assert!(tastenkuerzel(&Quelle::Hyprland("/h".into()), "tk").2.starts_with("bind = SUPER ALT, T, exec, tk pause"));
-        assert!(tastenkuerzel(&Quelle::Niri("/n".into()), "tk").2.contains("Mod+Alt+Space { spawn \"tk\" \"uebersicht\"; }"));
+        assert!(tastenkuerzel(&Quelle::Hyprland("/h".into()), "tk", false).2.starts_with("bind = SUPER ALT, T, exec, tk pause"));
+        let (_, datei, zeilen) = tastenkuerzel(&Quelle::Hyprland("/h".into()), "tk", true);
+        assert_eq!(datei, "~/.config/hypr/hyprland.lua");
+        assert_eq!(zeilen, "hl.bind(\"SUPER + ALT + T\", hl.dsp.exec_cmd(\"tk pause\"))\nhl.bind(\"SUPER + ALT + SPACE\", hl.dsp.exec_cmd(\"tk uebersicht\"))");
+        assert!(tastenkuerzel(&Quelle::Niri("/n".into()), "tk", false).2.contains("Mod+Alt+Space { spawn \"tk\" \"uebersicht\"; }"));
     }
 }

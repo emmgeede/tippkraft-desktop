@@ -34,9 +34,12 @@ fn aktives_fenster(verz: &Path) -> Option<String> {
 /// Liest den Fokus und ruft `melden` bei jedem Fensterwechsel auf. Kehrt nur bei Fehlern zurück.
 pub fn beobachten(verz: &Path, melden: &mut dyn FnMut(Option<String>)) -> Result<(), String> {
     let ereignisse = UnixStream::connect(verz.join(".socket2.sock")).map_err(|e| format!("Hyprland-IPC nicht erreichbar: {e}"))?;
-    melden(aktives_fenster(verz));
+    let mut zuletzt = aktives_fenster(verz);
+    melden(zuletzt.clone());
     for z in BufReader::new(ereignisse).lines() {
-        if let Some(app) = zeile(&z.map_err(|e| e.to_string())?) {
+        // Hyprland 0.57 schickt denselben Wechsel teils doppelt
+        if let Some(app) = zeile(&z.map_err(|e| e.to_string())?).filter(|a| *a != zuletzt) {
+            zuletzt = app.clone();
             melden(app);
         }
     }
@@ -76,7 +79,7 @@ mod tests {
         std::thread::spawn(move || {
             let (mut s, _) = ereignisse.accept().unwrap();
             std::thread::sleep(std::time::Duration::from_millis(100));
-            s.write_all(b"workspace>>2\nactivewindow>>org.keepassxc.KeePassXC,DB\nactivewindowv2>>abc\nactivewindow>>,\n").unwrap();
+            s.write_all(b"workspace>>2\nactivewindow>>foot,x\nactivewindow>>org.keepassxc.KeePassXC,DB\nactivewindowv2>>abc\nactivewindow>>org.keepassxc.KeePassXC,DB\nactivewindow>>,\n").unwrap();
         });
         let mut gemeldet = vec![];
         assert!(beobachten(&verz, &mut |a| gemeldet.push(a)).is_err());
