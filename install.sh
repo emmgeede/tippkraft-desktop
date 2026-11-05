@@ -23,7 +23,7 @@ fi
 if [ ! -w /dev/uinput ]; then
   fail "tippkraft cannot write to /dev/uinput, which it needs to type text. Run:
 echo 'KERNEL==\"uinput\", GROUP=\"input\", MODE=\"0660\", OPTIONS+=\"static_node=uinput\"' | sudo tee /etc/udev/rules.d/60-tippkraft-uinput.rules
-sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
+sudo udevadm control --reload && sudo modprobe uinput && sudo udevadm trigger --sysname-match=uinput --action=add
 then run this installer again."
 fi
 command -v curl >/dev/null 2>&1 || fail "curl is missing."
