@@ -77,7 +77,7 @@ impl Wayland {
             return Ok(());
         }
         let mut symbole: Vec<xkb::Keysym> = Vec::new();
-        for s in &folge {
+        for (s, _) in &folge {
             if !symbole.contains(s) {
                 symbole.push(*s);
             }
@@ -89,12 +89,18 @@ impl Wayland {
         datei.write_all(keymap.as_bytes()).and_then(|_| datei.write_all(&[0])).map_err(|e| e.to_string())?;
         vk.keymap(xkb::KEYMAP_FORMAT_TEXT_V1, datei.as_fd(), keymap.len() as u32 + 1);
         vk.modifiers(0, 0, 0, 0);
-        for s in folge {
+        for (s, umschalt) in folge {
             lebt();
             let code = symbole.iter().position(|x| *x == s).unwrap() as u32 + 1; // evdev-Code = xkb-Code - 8
             let t = self.start.elapsed().as_millis() as u32;
+            if umschalt {
+                vk.modifiers(SHIFT, 0, 0, 0);
+            }
             vk.key(t, code, 1);
             vk.key(t, code, 0);
+            if umschalt {
+                vk.modifiers(0, 0, 0, 0);
+            }
             self.conn.flush().map_err(|e| e.to_string())?;
             if !verzoegerung.is_zero() {
                 std::thread::sleep(verzoegerung);
@@ -122,23 +128,28 @@ fn taste_symbol(t: Taste) -> xkb::Keysym {
     }
 }
 
-pub fn tastenfolge(loeschen: usize, aktionen: &[Aktion]) -> Vec<xkb::Keysym> {
-    let mut out = vec![xkb::Keysym::BackSpace; loeschen];
+/// Modifier-Maske für Umschalt im xkb-Standard ("complete")
+const SHIFT: u32 = 1;
+
+/// Tasten mit Umschalt-Flag. Ein Zeilenumbruch im Text wird Umschalt+Eingabe: Chats wie Messenger,
+/// Slack oder WhatsApp schicken bei reiner Eingabetaste ab. Nur [[Enter]] tippt die echte Eingabetaste.
+pub fn tastenfolge(loeschen: usize, aktionen: &[Aktion]) -> Vec<(xkb::Keysym, bool)> {
+    let mut out = vec![(xkb::Keysym::BackSpace, false); loeschen];
     for a in aktionen {
         match a {
             Aktion::Text(t) => {
                 for c in t.chars() {
                     out.push(match c {
-                        '\n' => xkb::Keysym::Return,
-                        '\t' => xkb::Keysym::Tab,
-                        c => xkb::utf32_to_keysym(c as u32),
+                        '\n' => (xkb::Keysym::Return, true),
+                        '\t' => (xkb::Keysym::Tab, false),
+                        c => (xkb::utf32_to_keysym(c as u32), false),
                     });
                 }
             }
-            Aktion::Taste(t, n) => out.extend(std::iter::repeat_n(taste_symbol(*t), *n as usize)),
+            Aktion::Taste(t, n) => out.extend(std::iter::repeat_n((taste_symbol(*t), false), *n as usize)),
         }
     }
-    out.retain(|s| s.raw() != 0); // NoSymbol: nicht darstellbar
+    out.retain(|(s, _)| s.raw() != 0); // NoSymbol: nicht darstellbar
     out
 }
 
@@ -200,13 +211,21 @@ mod tests {
     #[test]
     fn tastenfolge_mit_umlauten_emoji_und_tokens() {
         let f = tastenfolge(2, &[Aktion::Text("ä€🙂\n".into()), Aktion::Taste(Taste::Tab, 2)]);
-        let namen: Vec<String> = f.iter().map(|s| name(*s)).collect();
+        let namen: Vec<String> = f.iter().map(|(s, _)| name(*s)).collect();
         assert_eq!(namen, ["BackSpace", "BackSpace", "adiaeresis", "EuroSign", "U1F642", "Return", "Tab", "Tab"]);
+    }
+
+    /// Zeilenumbruch im Text = Umschalt+Eingabe (neue Zeile in Chats), nur [[Enter]] ist die echte Eingabetaste
+    #[test]
+    fn zeilenumbruch_mit_umschalt_enter_token_ohne() {
+        let f = tastenfolge(0, &[Aktion::Text("a\nb".into()), Aktion::Taste(Taste::Enter, 1)]);
+        let r = xkb::Keysym::Return;
+        assert_eq!(f, [(xkb::utf32_to_keysym('a' as u32), false), (r, true), (xkb::utf32_to_keysym('b' as u32), false), (r, false)]);
     }
 
     #[test]
     fn keymap_ist_kompilierbar() {
-        let syms = tastenfolge(1, &[Aktion::Text("Grüße 🙂 A".into())]);
+        let syms: Vec<xkb::Keysym> = tastenfolge(1, &[Aktion::Text("Grüße 🙂 A".into())]).into_iter().map(|(s, _)| s).collect();
         let mut uniq = vec![];
         for s in syms {
             if !uniq.contains(&s) {

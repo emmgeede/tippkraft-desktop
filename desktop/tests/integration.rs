@@ -353,7 +353,7 @@ fn verbinden_abgebrochen_oder_falscher_code_f12_ac14() {
 fn login_gibt_es_nicht_mehr_f12_ac17() {
     let (code, out) = cli(&umgebung("login-weg"), &["login", "http://localhost:4321", "tk_x"]);
     assert_ne!(code, 0);
-    assert!(out.contains("tippkraft verbinden"), "{out}");
+    assert!(out.contains("tippkraft connect"), "{out}");
 }
 
 impl Server {
@@ -505,7 +505,7 @@ fn einrichten_installiert_und_aktiviert_ac13() {
     let start = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-starten.desktop")).unwrap();
     assert!(start.contains("Name=Start tippkraft") && start.contains("Name[de]=tippkraft starten") && start.contains("Exec=systemctl --user start tippkraft.service"), "F13 AC-8");
     let starter = std::fs::read_to_string(home.join(".local/share/applications/tippkraft-verbinden.desktop")).unwrap();
-    assert!(starter.contains("Name[de]=tippkraft verbinden") && starter.contains(&format!("Exec={} verbinden", home.join(".local/bin/tippkraft").display())));
+    assert!(starter.contains("Name[de]=tippkraft verbinden") && starter.contains(&format!("Exec={} connect", home.join(".local/bin/tippkraft").display())));
     assert!(home.join(".local/bin/tippkraft").exists());
     let unit = std::fs::read_to_string(home.join(".config/systemd/user/tippkraft.service")).unwrap();
     assert!(unit.contains("ExecStart=%h/.local/bin/tippkraft run") && unit.contains("Restart=on-failure") && unit.contains("WantedBy=graphical-session.target"));
