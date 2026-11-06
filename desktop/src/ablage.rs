@@ -31,6 +31,8 @@ type Inhalt = Vec<(String, Vec<u8>)>;
 struct Zustand {
     mimes: HashMap<ObjectId, Vec<String>>,
     aktuell: Option<ExtDataControlOfferV1>,
+    /// Auswahl (primary selection): viele Terminals fügen bei Umschalt+Einfg diese ein
+    auswahl: Option<ExtDataControlOfferV1>,
     /// Was unsere eigene Quelle ausliefert
     liefern: HashMap<ObjectId, Inhalt>,
 }
@@ -78,22 +80,29 @@ impl Zwischenablage for KdeAblage {
 fn schleife(conn: Connection, mut queue: EventQueue<Zustand>, mut z: Zustand, mgr: ExtDataControlManagerV1, geraet: ExtDataControlDeviceV1, rx: Receiver<Befehl>) {
     let qh = queue.handle();
     let mut gesichert: Inhalt = vec![];
+    let mut gesichert_auswahl: Inhalt = vec![];
     loop {
         pumpen(&conn, &mut queue, &mut z, 20);
         match rx.try_recv() {
             Ok(Befehl::Setzen(text, antwort)) => {
                 gesichert = z.aktuell.clone().map(|o| lesen(&conn, &mut queue, &mut z, &o)).unwrap_or_default();
+                gesichert_auswahl = z.auswahl.clone().map(|o| lesen(&conn, &mut queue, &mut z, &o)).unwrap_or_default();
                 let mut inhalt: Inhalt = TEXT.iter().map(|m| (m.to_string(), text.as_bytes().to_vec())).collect();
                 inhalt.push((GEHEIM.into(), b"secret".to_vec()));
-                anbieten(&mgr, &geraet, &qh, &mut z, inhalt);
+                anbieten(&mgr, &geraet, &qh, &mut z, inhalt.clone(), false);
+                anbieten(&mgr, &geraet, &qh, &mut z, inhalt, true);
                 let _ = conn.flush();
                 let _ = antwort.send(Ok(()));
             }
             Ok(Befehl::Zurueck(antwort)) => {
-                if gesichert.is_empty() {
-                    geraet.set_selection(None);
-                } else {
-                    anbieten(&mgr, &geraet, &qh, &mut z, std::mem::take(&mut gesichert));
+                for (inhalt, auswahl) in [(std::mem::take(&mut gesichert), false), (std::mem::take(&mut gesichert_auswahl), true)] {
+                    if !inhalt.is_empty() {
+                        anbieten(&mgr, &geraet, &qh, &mut z, inhalt, auswahl);
+                    } else if auswahl {
+                        geraet.set_primary_selection(None);
+                    } else {
+                        geraet.set_selection(None);
+                    }
                 }
                 let _ = conn.flush();
                 let _ = antwort.send(());
@@ -104,13 +113,17 @@ fn schleife(conn: Connection, mut queue: EventQueue<Zustand>, mut z: Zustand, mg
     }
 }
 
-fn anbieten(mgr: &ExtDataControlManagerV1, geraet: &ExtDataControlDeviceV1, qh: &QueueHandle<Zustand>, z: &mut Zustand, inhalt: Inhalt) {
+fn anbieten(mgr: &ExtDataControlManagerV1, geraet: &ExtDataControlDeviceV1, qh: &QueueHandle<Zustand>, z: &mut Zustand, inhalt: Inhalt, auswahl: bool) {
     let q = mgr.create_data_source(qh, ());
     for (m, _) in &inhalt {
         q.offer(m.clone());
     }
     z.liefern.insert(q.id(), inhalt);
-    geraet.set_selection(Some(&q));
+    if auswahl {
+        geraet.set_primary_selection(Some(&q));
+    } else {
+        geraet.set_selection(Some(&q));
+    }
 }
 
 /// Alle Formate des aktuellen Inhalts lesen. Die Quelle ist eine andere App, also während des Lesens weiter pumpen.
@@ -179,6 +192,13 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for Zustand {
                     alt.destroy();
                 }
                 z.aktuell = id;
+            }
+            device::Event::PrimarySelection { id } => {
+                if let Some(alt) = z.auswahl.take() {
+                    z.mimes.remove(&alt.id());
+                    alt.destroy();
+                }
+                z.auswahl = id;
             }
             _ => {}
         }

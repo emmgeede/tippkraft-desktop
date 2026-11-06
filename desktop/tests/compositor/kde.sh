@@ -20,8 +20,10 @@ sleep 0.5
 sleep 1.5
 [ "$(wl-paste -n)" = "neu 🙂" ] || fehler "tippkraft setzt nicht: $(wl-paste -n 2>&1) / $(cat "$XDG_RUNTIME_DIR/ablage.log")"
 wl-paste -l | grep -q x-kde-passwordManagerHint || fehler "Klipper-Hinweis fehlt"
+[ "$(wl-paste -p -n)" = "neu 🙂" ] || fehler "Auswahl nicht gesetzt"
 sleep 3
 [ "$(wl-paste -n)" = "alt" ] || fehler "nicht zurückgesetzt: $(wl-paste -n 2>&1)"
+[ -z "$(wl-paste -p -n 2>/dev/null)" ] || fehler "Auswahl nicht zurückgesetzt"
 echo "KDE Zwischenablage: ok"
 
 # AC-7: Fensterwechsel über das KWin-Skript
