@@ -99,7 +99,7 @@ fn popup() -> Result<(), String> {
 fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion>, auto: tippkraft::format::Automatisch) {
     std::thread::spawn(move || {
         let programm = std::env::var_os("TIPPKRAFT_POPUP").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| "tippkraft".into());
-        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum: auto.datum, zwischenablage: auto.zwischenablage }).unwrap();
+        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum: auto.datum, zwischenablage: auto.zwischenablage, jetzt: auto.jetzt, de: auto.de }).unwrap();
         let werte = (|| {
             let mut kind = std::process::Command::new(&programm).arg("popup").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().ok()?;
             std::io::Write::write_all(&mut kind.stdin.take()?, anfrage.as_bytes()).ok()?;

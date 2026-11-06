@@ -18,6 +18,11 @@ pub struct Anfrage {
     /// nur bei {{=clipboard}} (F9)
     #[serde(default)]
     pub zwischenablage: Option<String>,
+    /// F40: Zeitpunkt und Sprache für {{=date:FORMAT}}
+    #[serde(default)]
+    pub jetzt: String,
+    #[serde(default)]
+    pub de: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -243,7 +248,7 @@ impl eframe::App for App {
             ui.label(RichText::new(tr(T::PopupVorschau)).color(f.muted).size(13.0));
             egui::Frame::new().fill(f.flaeche).corner_radius(6).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &Automatisch { datum: self.anfrage.datum.clone(), zwischenablage: self.anfrage.zwischenablage.clone() })).monospace());
+                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &Automatisch { datum: self.anfrage.datum.clone(), zwischenablage: self.anfrage.zwischenablage.clone(), jetzt: self.anfrage.jetzt.clone(), de: self.anfrage.de })).monospace());
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
@@ -310,8 +315,8 @@ mod tests {
         f.waehlen(1); // im Textfeld wirkungslos
         f.texte[1] = "Muster".into();
         assert_eq!(f.werte()["Anrede"], "Frau");
-        assert_eq!(f.vorschau(inhalt, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None }), "Frau Muster, 04.11.2026⇥ Muster");
-        assert_eq!(f.vorschau("a{{=cursor}}b {{=clipboard}}", &Automatisch { datum: String::new(), zwischenablage: Some("Z".into()) }), "a▏b Z");
+        assert_eq!(f.vorschau(inhalt, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None, ..Default::default() }), "Frau Muster, 04.11.2026⇥ Muster");
+        assert_eq!(f.vorschau("a{{=cursor}}b {{=clipboard}}", &Automatisch { datum: String::new(), zwischenablage: Some("Z".into()), ..Default::default() }), "a▏b Z");
         f.weiter(false);
         assert_eq!(f.aktiv, 0, "Tab springt vom letzten zum ersten Feld");
         f.weiter(true);

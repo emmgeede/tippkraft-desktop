@@ -204,8 +204,63 @@ pub fn abfragen(inhalt: &str) -> Vec<Abfrage> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Automatisch {
     pub datum: String,
+    /// F40: Zeitpunkt für {{=date:FORMAT}} als "%Y-%m-%dT%H:%M", Namen auf Deutsch bei `de`
+    #[serde(default)]
+    pub jetzt: String,
+    #[serde(default)]
+    pub de: bool,
     /// nur gelesen, wenn der Inhalt {{=clipboard}} enthält
     pub zwischenablage: Option<String>,
+}
+
+const MONATE_DE: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+const MONATE_EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const TAGE_DE: [&str; 7] = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
+const TAGE_EN: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+/// F40: Datum nach Muster wie dd.MM.yyyy, MMMM, EEEE, HH:mm. Unbekannte Zeichen bleiben wörtlich.
+pub fn datum_mit_format(t: chrono::NaiveDateTime, fmt: &str, de: bool) -> String {
+    use chrono::{Datelike, Timelike};
+    let monat = (if de { MONATE_DE } else { MONATE_EN })[t.month0() as usize];
+    let tag = (if de { TAGE_DE } else { TAGE_EN })[t.weekday().num_days_from_monday() as usize];
+    let kurz = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+    // längste Muster zuerst
+    let muster: [(&str, String); 12] = [
+        ("yyyy", format!("{:04}", t.year())),
+        ("MMMM", monat.to_string()),
+        ("EEEE", tag.to_string()),
+        ("MMM", kurz(monat, 3)),
+        ("EEE", kurz(tag, if de { 2 } else { 3 })),
+        ("yy", format!("{:02}", t.year() % 100)),
+        ("MM", format!("{:02}", t.month())),
+        ("dd", format!("{:02}", t.day())),
+        ("HH", format!("{:02}", t.hour())),
+        ("mm", format!("{:02}", t.minute())),
+        ("M", t.month().to_string()),
+        ("d", t.day().to_string()),
+    ];
+    let mut out = String::new();
+    let mut rest = fmt;
+    'aussen: while !rest.is_empty() {
+        // 'text' bleibt wörtlich, '' ist ein einzelnes Anführungszeichen
+        if let Some(r) = rest.strip_prefix('\'') {
+            let ende = r.find('\'').unwrap_or(r.len());
+            out.push_str(if ende == 0 { "'" } else { &r[..ende] });
+            rest = r.get(ende + 1..).unwrap_or_default();
+            continue;
+        }
+        for (m, w) in &muster {
+            if let Some(r) = rest.strip_prefix(m) {
+                out.push_str(w);
+                rest = r;
+                continue 'aussen;
+            }
+        }
+        let c = rest.chars().next().unwrap();
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 /// Markiert {{=cursor}} bis zur Auswertung in `engine::nach_popup` (Zeichen aus dem Private-Use-Bereich)
@@ -219,6 +274,13 @@ pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>
         .map(|s| match s {
             Stueck::Text(t) => t.to_string(),
             Stueck::Klammer("=date" | "=datum") => auto.datum.clone(),
+            Stueck::Klammer(k) if k.starts_with("=date:") || k.starts_with("=datum:") => {
+                let fmt = k.split_once(':').map(|(_, f)| f).unwrap_or_default();
+                match chrono::NaiveDateTime::parse_from_str(&auto.jetzt, "%Y-%m-%dT%H:%M") {
+                    Ok(t) if !fmt.is_empty() => datum_mit_format(t, fmt, auto.de),
+                    _ => auto.datum.clone(),
+                }
+            }
             Stueck::Klammer("=clipboard") => auto.zwischenablage.as_deref().unwrap_or_default().replace("[[", "[[[["),
             Stueck::Klammer("=cursor") => CURSOR.to_string(),
             Stueck::Klammer(k) => match k.strip_prefix('?') {
@@ -232,6 +294,30 @@ pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zeit(s: &str) -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap()
+    }
+
+    #[test]
+    fn datum_mit_format_f40_ac1() {
+        let t = zeit("2026-03-06 09:05");
+        assert_eq!(datum_mit_format(t, "d. MMMM yyyy", true), "6. März 2026");
+        assert_eq!(datum_mit_format(t, "dd.MM.yy", true), "06.03.26");
+        assert_eq!(datum_mit_format(t, "EEEE, d. MMM", true), "Freitag, 6. Mär");
+        assert_eq!(datum_mit_format(t, "EEE d MMM yyyy, HH:mm", false), "Fri 6 Mar 2026, 09:05");
+        assert_eq!(datum_mit_format(t, "MMMM d, yyyy", false), "March 6, 2026");
+        assert_eq!(datum_mit_format(t, "yyyy-MM-dd (KW)", false), "2026-03-06 (KW)");
+        assert_eq!(datum_mit_format(t, "EEEE, 'den' d. MMMM", true), "Freitag, den 6. März");
+        assert_eq!(datum_mit_format(t, "d. MMMM ''yy", true), "6. März '26");
+    }
+
+    #[test]
+    fn date_platzhalter_mit_und_ohne_format_f40_ac2() {
+        let auto = Automatisch { datum: "06.03.2026".into(), jetzt: "2026-03-06T09:05".into(), de: true, zwischenablage: None };
+        let w = std::collections::HashMap::new();
+        assert_eq!(einsetzen("{{=date}} / {{=date:d. MMMM}} / {{=datum:yyyy}} / {{=date:}}", &w, &auto), "06.03.2026 / 6. März / 2026 / 06.03.2026");
+    }
 
     #[test]
     fn liest_den_vertrag_ac15() {
@@ -314,7 +400,7 @@ mod tests {
     fn einsetzen_ac5_ac7_ac8() {
         let werte = std::collections::HashMap::from([("Name".to_string(), "Muster [[Tab]] {{=datum}}".to_string()), ("Anrede".to_string(), "Frau".to_string())]);
         assert_eq!(
-            einsetzen("{{?Anrede:Herr|Frau}} {{?Name}}, {{=datum}} {{{{?x}} {{?Name}} {{unbekannt}}", &werte, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None }),
+            einsetzen("{{?Anrede:Herr|Frau}} {{?Name}}, {{=datum}} {{{{?x}} {{?Name}} {{unbekannt}}", &werte, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None, ..Default::default() }),
             // Werte werden maskiert: [[ → [[[[, damit sie Text bleiben. {{=datum}} im Wert bleibt Text.
             "Frau Muster [[[[Tab]] {{=datum}}, 04.11.2026 {{?x}} Muster [[[[Tab]] {{=datum}} {{unbekannt}}"
         );

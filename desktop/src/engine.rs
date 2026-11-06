@@ -66,12 +66,14 @@ pub struct Engine {
     letzte: Option<Rueckgaengig>,
     ausgeschlossen: bool,
     festes_datum: Option<String>,
+    /// Nur für Tests: fester Zeitpunkt für {{=date:FORMAT}}
+    festes_jetzt: Option<String>,
     feste_zwischenablage: Option<String>,
 }
 
 impl Engine {
     pub fn new(stand: Stand) -> Self {
-        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, feste_zwischenablage: None };
+        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, festes_jetzt: None, feste_zwischenablage: None };
         e.stand(stand);
         e
     }
@@ -108,7 +110,8 @@ impl Engine {
     /// Automatische Werte für diesen Inhalt. Die Zwischenablage wird nur gelesen, wenn sie gebraucht wird.
     pub fn automatisch(&self, inhalt: &str) -> Automatisch {
         let zwischenablage = inhalt.contains("{{=clipboard}}").then(|| self.feste_zwischenablage.clone().unwrap_or_else(zwischenablage_lesen));
-        Automatisch { datum: self.datum(), zwischenablage }
+        let jetzt = self.festes_jetzt.clone().unwrap_or_else(|| chrono::Local::now().naive_local().format("%Y-%m-%dT%H:%M").to_string());
+        Automatisch { datum: self.datum(), jetzt, de: crate::i18n::aktuell() == crate::i18n::Sprache::De, zwischenablage }
     }
 
     pub fn anzahl(&self) -> usize {
@@ -486,7 +489,7 @@ mod tests {
     #[test]
     fn nach_dem_popup_ausfuellen_ac7() {
         let werte = std::collections::HashMap::from([("Anrede".to_string(), "frau".to_string()), ("Name".to_string(), "Muster".to_string())]);
-        let auto = Automatisch { datum: "04.11.2026".into(), zwischenablage: None };
+        let auto = Automatisch { datum: "04.11.2026".into(), zwischenablage: None, ..Default::default() };
         assert_eq!(nach_popup("{{?Anrede:Herr|frau}} {{?Name}}, {{=datum}}", &werte, &auto, true), vec![Aktion::Text("Frau Muster, 04.11.2026".into())]);
         assert_eq!(nach_popup("{{?Name}}[[Tab]]", &werte, &auto, false), vec![Aktion::Text("Muster".into()), Aktion::Taste(Taste::Tab, 1)]);
     }
