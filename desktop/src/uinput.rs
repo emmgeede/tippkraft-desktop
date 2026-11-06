@@ -367,3 +367,26 @@ mod ausfuehren_tests {
         assert_eq!(log, ["setzen 🙂", "zurück"]);
     }
 }
+
+/// F11 AC-5: aktives Layout bei jeder Ersetzung frisch lesen. Nicht lesbar = erstes Layout.
+pub fn aktuelles_layout(s: Sitzung) -> u32 {
+    match s {
+        Sitzung::Kde => crate::kde::layout().unwrap_or(0),
+        Sitzung::Gnome => {
+            let lesen = |k: &str| {
+                std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.input-sources", k]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+            };
+            gnome_layout(&lesen("sources"), &lesen("mru-sources"))
+        }
+        Sitzung::Wlroots => 0,
+    }
+}
+
+/// GNOME: Zwischenablage wird nie benutzt (Fremdzeichen per Unicode-Eingabe)
+pub struct KeineAblage;
+impl Zwischenablage for KeineAblage {
+    fn setzen(&mut self, _: &str) -> Result<(), String> {
+        Err("keine Zwischenablage".into())
+    }
+    fn zuruecksetzen(&mut self) {}
+}

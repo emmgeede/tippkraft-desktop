@@ -54,3 +54,10 @@ pub fn beobachten(melden: &mut dyn FnMut(Option<String>)) -> Result<(), String> 
         }
     }
 }
+
+/// F11 AC-5: Index des aktiven Layouts (org.kde.keyboard), None wenn nicht lesbar
+pub fn layout() -> Option<u32> {
+    let conn = zbus::blocking::Connection::session().ok()?;
+    let m = conn.call_method(Some("org.kde.keyboard"), "/Layouts", Some("org.kde.KeyboardLayouts"), "getLayout", &()).ok()?;
+    m.body().deserialize::<u32>().ok()
+}

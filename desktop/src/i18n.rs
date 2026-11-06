@@ -73,6 +73,9 @@ pub enum T {
     TrayWebtool,
     TrayUpdate,
     Tastenkuerzel,
+    TastenDesktop,
+    AusschlussGnome,
+    TrayGnome,
     UpdateStatus,
     TrayNeuVerbinden,
     TrayBeenden,
@@ -162,6 +165,15 @@ Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
         TrayWebtool => ("Open web app", "Webtool öffnen"),
         TrayUpdate => ("Update available: {0}", "Update verfügbar: {0}"),
         Tastenkuerzel => ("Shortcuts for {0}: add these lines to {1}", "Tastenkürzel für {0}: diese Zeilen in {1} eintragen"),
+        TastenDesktop => (
+            "Shortcuts for {0}: open {1} and add two custom shortcuts:",
+            "Tastenkürzel für {0}: {1} öffnen und zwei eigene Kurzbefehle anlegen:"
+        ),
+        AusschlussGnome => ("Note: the exclusion list does not work on GNOME yet. tippkraft expands in every window.", "Hinweis: Die Ausschlussliste wirkt unter GNOME noch nicht. tippkraft löst in jedem Fenster aus."),
+        TrayGnome => (
+            "No tray icon? Install and enable the GNOME extension \"AppIndicator and KStatusNotifierItem Support\".",
+            "Kein Tray-Symbol? Die GNOME-Erweiterung \"AppIndicator and KStatusNotifierItem Support\" installieren und einschalten."
+        ),
         UpdateStatus => ("Update available: {0}. Install with: {1}", "Update verfügbar: {0}. Installieren mit: {1}"),
         TrayNeuVerbinden => ("Reconnect …", "Neu verbinden …"),
         TrayBeenden => ("Quit", "Beenden"),

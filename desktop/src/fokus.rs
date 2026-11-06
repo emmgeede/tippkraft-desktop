@@ -63,7 +63,7 @@ pub fn tastenkuerzel(q: &Quelle, bin: &str, hypr_lua: bool) -> (&'static str, &'
         Quelle::Sway(_) => ("Sway", "~/.config/sway/config", format!("bindsym $mod+Alt+t exec {bin} pause\nbindsym $mod+Alt+space exec {bin} overview")),
         Quelle::Hyprland(_) if hypr_lua => ("Hyprland", "~/.config/hypr/hyprland.lua", format!("hl.bind(\"SUPER + ALT + T\", hl.dsp.exec_cmd(\"{bin} pause\"))\nhl.bind(\"SUPER + ALT + SPACE\", hl.dsp.exec_cmd(\"{bin} overview\"))")),
         Quelle::Hyprland(_) => ("Hyprland", "~/.config/hypr/hyprland.conf", format!("bind = SUPER ALT, T, exec, {bin} pause\nbind = SUPER ALT, SPACE, exec, {bin} overview")),
-        Quelle::Kde => ("KDE Plasma", "Systemeinstellungen → Tastatur → Kurzbefehle → Neu → Befehl oder Skript", format!("Meta+Alt+T: {bin} pause\nMeta+Alt+Leertaste: {bin} overview")),
+        Quelle::Kde => ("KDE Plasma", "", format!("Meta+Alt+T: {bin} pause\nMeta+Alt+Space: {bin} overview")),
     }
 }
 

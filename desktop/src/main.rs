@@ -147,6 +147,14 @@ const INSTALLIEREN: &str = "curl -fsSL https://tippkraft.com/install.sh | sh";
 fn status(pfade: &Pfade) -> Result<(), String> {
     let antwort = steuerung::senden(&pfade.socket, "status").ok_or(tr(T::LaeuftNicht))?;
     println!("{antwort}");
+    // F11 AC-8, AC-12: was unter GNOME fehlt
+    if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
+        println!("{}", tr(T::AusschlussGnome));
+        let erweiterung = std::process::Command::new("gnome-extensions").args(["list", "--enabled"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("appindicator")).unwrap_or(true);
+        if !erweiterung {
+            println!("{}", tr(T::TrayGnome));
+        }
+    }
     // F21 AC-8: Hinweis aus dem zuletzt geladenen Stand
     let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok());
     if let Some(v) = stand.and_then(|s| s.desktop_version).filter(|v| format::neuer(v, env!("CARGO_PKG_VERSION"))) {
@@ -208,7 +216,18 @@ fn einrichten() -> Result<(), String> {
     // F22 AC-5: Tastenkürzel für den laufenden Compositor zum Kopieren
     if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
         let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string(), home.join(".config/hypr/hyprland.lua").exists());
-        println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
+        if q == tippkraft::fokus::Quelle::Kde {
+            // F11 AC-10: KDE hat keine Konfigurationsdatei dafür, also der Weg in den Systemeinstellungen
+            let weg = if i18n::aktuell() == Sprache::De { "Systemeinstellungen → Tastatur → Kurzbefehle → Neu → Befehl oder Skript" } else { "System Settings → Keyboard → Shortcuts → Add New → Command or Script" };
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
+        } else {
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
+        }
+    } else if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
+        let weg = if i18n::aktuell() == Sprache::De { "Einstellungen → Tastatur → Tastenkürzel anzeigen und anpassen → Eigene Tastenkürzel" } else { "Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts" };
+        let bin = ziel.display();
+        println!("\n{}\n\nSuper+Alt+T: {bin} pause\nSuper+Alt+Space: {bin} overview\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&"GNOME", &weg]));
+        println!("{}\n{}\n", tr(T::AusschlussGnome), tr(T::TrayGnome));
     }
     let pfade = Pfade::aus_umgebung();
     if Zugang::laden(&pfade.zugang).is_some() {
@@ -324,6 +343,30 @@ fn xkb_state(keymap: &str) -> Result<xkb::State, String> {
     Ok(xkb::State::new(&km))
 }
 
+/// Ersetzung ausgeben: Niri/Sway/Hyprland über virtual-keyboard, GNOME/KDE über uinput (F11)
+#[allow(clippy::too_many_arguments)]
+fn ausgeben(
+    wl: &mut wayland::Wayland,
+    sitzung: tippkraft::uinput::Sitzung,
+    state: &xkb::State,
+    weitergabe: Option<&mut VirtualDevice>,
+    ablage: &mut dyn tippkraft::uinput::Zwischenablage,
+    loeschen: usize,
+    aktionen: &[format::Aktion],
+    verzoegerung: Duration,
+    lebt: &dyn Fn(),
+) -> Result<(), String> {
+    use tippkraft::uinput::{Fremd, Sitzung, aktuelles_layout, ausfuehren, plan};
+    if sitzung == Sitzung::Wlroots {
+        return wl.tippen(loeschen, aktionen, verzoegerung, lebt);
+    }
+    let dev = weitergabe.ok_or("keine uinput-Tastatur")?;
+    let km = state.get_keymap();
+    let layout = aktuelles_layout(sitzung);
+    let schritte = plan(&km, layout, loeschen, aktionen, if sitzung == Sitzung::Kde { Fremd::Einfuegen } else { Fremd::Unicode });
+    ausfuehren(&schritte, &km, layout, &mut |code, wert| drop(dev.emit(&[InputEvent::new(EventType::KEY.0, code, wert)])), ablage, verzoegerung, lebt)
+}
+
 fn jetzt_ms() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
@@ -367,7 +410,13 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
         });
     }
 
-    let mut wl = wayland::Wayland::verbinden(!o.trocken)?;
+    // F11: GNOME/KDE haben kein virtual-keyboard, dort tippt tippkraft über die uinput-Tastatur
+    let sitzung = tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    let mut wl = wayland::Wayland::verbinden(!o.trocken && sitzung == tippkraft::uinput::Sitzung::Wlroots)?;
+    let mut ablage: Box<dyn tippkraft::uinput::Zwischenablage> = match sitzung {
+        tippkraft::uinput::Sitzung::Kde if !o.trocken => Box::new(tippkraft::ablage::KdeAblage::starten()?),
+        _ => Box::new(tippkraft::uinput::KeineAblage),
+    };
     let mut state = xkb_state(wl.zustand.keymap.as_deref().unwrap_or_default())?;
     wl.zustand.neu = false;
 
@@ -386,6 +435,12 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
     } else {
         o.geraete.iter().map(|p| Device::open(p).map(|d| (d, true)).map_err(|e| format!("{}: {e}", p.display()))).collect::<Result<_, _>>()?
     };
+    if sitzung != tippkraft::uinput::Sitzung::Wlroots {
+        // Ausgabe braucht Umschalt, AltGr, Strg, Einfg und den ganzen Tastenblock, egal welche Tastatur dran ist
+        for c in (1..128).chain([tippkraft::uinput::EINFG]) {
+            tasten.insert(KeyCode::new(c));
+        }
+    }
     for (mut d, tastatur) in geraete {
         if tastatur {
             for k in d.supported_keys().map(|k| k.iter().collect::<Vec<_>>()).unwrap_or_default() {
@@ -488,6 +543,15 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
         }
         if letzte_pruefung.elapsed() > Duration::from_secs(1) {
             letzte_pruefung = Instant::now();
+            // F11: auf GNOME/KDE kennt nur die Sitzung das aktive Layout, also abgleichen (Umschalter bleiben erhalten)
+            if sitzung != tippkraft::uinput::Sitzung::Wlroots {
+                let l = tippkraft::uinput::aktuelles_layout(sitzung);
+                if l != state.serialize_layout(xkb::STATE_LAYOUT_EFFECTIVE) {
+                    let m = |t| state.serialize_mods(t);
+                    let (d, la, lo) = (m(xkb::STATE_MODS_DEPRESSED), m(xkb::STATE_MODS_LATCHED), m(xkb::STATE_MODS_LOCKED));
+                    state.update_mask(d, la, lo, 0, 0, l);
+                }
+            }
             let zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
             if zeit != stand_zeit {
                 stand_zeit = zeit;
@@ -607,7 +671,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 } else {
                     // Fokus muss erst ins ursprüngliche Fenster zurück. ponytail: feste Wartezeit statt Fokus-Ereignis abwarten
                     std::thread::sleep(Duration::from_millis(200));
-                    if let Err(e) = wl.tippen(loeschen, &aktionen, o.verzoegerung, || herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
+                    if let Err(e) = ausgeben(&mut wl, sitzung, &state, weitergabe.as_mut(), ablage.as_mut(), loeschen, &aktionen, o.verzoegerung, &|| herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
                         eprintln!("tippkraft: Ausgabe fehlgeschlagen: {e}");
                     }
                 }
@@ -683,7 +747,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                         } else {
                             // kurz warten, damit bereits weitergegebene Tasten vor der Ausgabe ankommen
                             std::thread::sleep(Duration::from_millis(15));
-                            if let Err(e) = wl.tippen(loeschen, &aktionen, o.verzoegerung, || herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
+                            if let Err(e) = ausgeben(&mut wl, sitzung, &state, weitergabe.as_mut(), ablage.as_mut(), loeschen, &aktionen, o.verzoegerung, &|| herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
                                 eprintln!("tippkraft: Ausgabe fehlgeschlagen: {e}");
                             }
                         }
