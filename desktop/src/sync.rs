@@ -106,6 +106,8 @@ pub enum Verbindung {
     Offline,
     TokenUngueltig,
     ServerNeuer,
+    /// Server antwortet 402: mehr Geräte verbunden, als der Tarif erlaubt
+    TarifGrenze,
 }
 
 impl std::fmt::Display for Verbindung {
@@ -116,12 +118,14 @@ impl std::fmt::Display for Verbindung {
             Verbindung::Offline => T::VerbOffline,
             Verbindung::TokenUngueltig => T::VerbTokenUngueltig,
             Verbindung::ServerNeuer => T::VerbServerNeuer,
+            Verbindung::TarifGrenze => T::VerbTarifGrenze,
         }))
     }
 }
 
 enum Fehler {
     TokenUngueltig,
+    TarifGrenze,
     Netz(String),
 }
 
@@ -134,6 +138,7 @@ fn anfrage(z: &Zugang, pfad: &str, body_timeout: Option<Duration>) -> Result<ure
         .into();
     agent.get(format!("{}{pfad}", z.server)).header("Authorization", format!("Bearer {}", z.token)).call().map_err(|e| match e {
         ureq::Error::StatusCode(401) => Fehler::TokenUngueltig,
+        ureq::Error::StatusCode(402) => Fehler::TarifGrenze,
         e => Fehler::Netz(e.to_string()),
     })
 }
@@ -142,6 +147,7 @@ fn anfrage(z: &Zugang, pfad: &str, body_timeout: Option<Duration>) -> Result<ure
 pub fn zugang_speichern(pfade: &Pfade, z: &Zugang) -> Result<usize, String> {
     let mut res = anfrage(z, "/api/sync/snapshot", Some(Duration::from_secs(30))).map_err(|e| match e {
         Fehler::TokenUngueltig => tr(T::TokenWiderrufen).to_string(),
+        Fehler::TarifGrenze => tr(T::VerbTarifGrenze).to_string(),
         Fehler::Netz(e) => f(crate::i18n::aktuell(), T::ServerNichtErreichbar, &[&e]),
     })?;
     let json = res.body_mut().read_to_string().map_err(|e| e.to_string())?;
@@ -335,6 +341,11 @@ pub fn schleife(pfade: &Pfade, mut melden: impl FnMut(Meldung)) {
                 melden(Meldung::Verbindung(Verbindung::TokenUngueltig));
                 // kurz, damit ein neues "tippkraft verbinden" schnell greift
                 std::thread::sleep(Duration::from_secs(10));
+            }
+            Err(Fehler::TarifGrenze) => {
+                melden(Meldung::Verbindung(Verbindung::TarifGrenze));
+                // Gerät getrennt oder Pro gebucht? Einmal pro Minute nachsehen.
+                std::thread::sleep(Duration::from_secs(60));
             }
             Err(Fehler::Netz(_)) => {
                 melden(Meldung::Verbindung(Verbindung::Offline));

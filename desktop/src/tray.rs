@@ -23,6 +23,7 @@ fn verbindung_kurz(s: Sprache, v: Verbindung) -> &'static str {
             Verbindung::TokenUngueltig => T::KurzTokenUngueltig,
             Verbindung::NichtAngemeldet => T::KurzNichtVerbunden,
             Verbindung::ServerNeuer => T::KurzServerNeuer,
+            Verbindung::TarifGrenze => T::KurzTarifGrenze,
         },
     )
 }
@@ -33,7 +34,7 @@ pub fn statuszeile(z: &TrayZustand) -> String {
 }
 
 fn warnung(z: &TrayZustand) -> bool {
-    matches!(z.verbindung, Verbindung::Offline | Verbindung::TokenUngueltig | Verbindung::ServerNeuer)
+    matches!(z.verbindung, Verbindung::Offline | Verbindung::TokenUngueltig | Verbindung::ServerNeuer | Verbindung::TarifGrenze)
 }
 
 // Logo (docs/brand/logo.svg, viewBox 32): Rahmen mit runden Ecken, Dreieck als gedrückte Taste

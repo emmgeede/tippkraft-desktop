@@ -173,6 +173,8 @@ struct Server {
     streams: Arc<Mutex<Vec<TcpStream>>>,
     /// challenge aus der Verbinden-URL, gegen die /api/sync/token den verifier prüft
     challenge: Arc<Mutex<String>>,
+    /// F32: antwortet 402, als wäre das Gerät über der Tarifgrenze
+    tarif_grenze: Arc<AtomicBool>,
 }
 
 impl Server {
@@ -184,6 +186,7 @@ impl Server {
             gueltig: Arc::new(AtomicBool::new(true)),
             streams: Arc::default(),
             challenge: Arc::default(),
+            tarif_grenze: Arc::default(),
         };
         let srv = s.clone();
         std::thread::spawn(move || {
@@ -222,6 +225,10 @@ impl Server {
         }
         if !self.gueltig.load(Ordering::SeqCst) || !anfrage.contains("authorization: bearer tk_gut") {
             let _ = c.write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            return;
+        }
+        if self.tarif_grenze.load(Ordering::SeqCst) {
+            let _ = c.write_all(b"HTTP/1.1 402 Payment Required\r\ncontent-type: application/json\r\ncontent-length: 25\r\nconnection: close\r\n\r\n{\"fehler\":\"tarif_grenze\"}");
             return;
         }
         let stand = self.stand.lock().unwrap().clone();
@@ -403,6 +410,18 @@ fn verbindet_sich_nach_abbruch_neu_ac6() {
     std::thread::sleep(Duration::from_millis(2500));
     tippen(&mut l, &[KeyCode::KEY_A, KeyCode::KEY_B, KeyCode::KEY_C, KeyCode::KEY_SPACE]);
     assert!(l.stdout.recv_timeout(Duration::from_secs(2)).expect("kein neuer Stand nach Neuverbindung").contains("Neu"));
+}
+
+/// F32 AC-6: Gerät über der Tarifgrenze zeigt den Hinweis, der lokale Stand bleibt nutzbar
+#[test]
+fn tarifgrenze_f32_ac6() {
+    let srv = Server::new_mfg();
+    let l = angemeldet("tarif", &srv);
+    assert!(warten_bis(Duration::from_secs(3), || status(&l).contains("verbunden")));
+    srv.tarif_grenze.store(true, Ordering::SeqCst);
+    srv.trennen();
+    assert!(warten_bis(Duration::from_secs(4), || status(&l).contains("Tarifgrenze erreicht")), "{}", status(&l));
+    assert!(status(&l).contains("Bausteine: 1"));
 }
 
 #[test]
