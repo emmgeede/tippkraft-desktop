@@ -6,7 +6,7 @@ This repository is open source (MIT) so you can check what a program that reads 
 
 ## Install
 
-Requirements: Linux x86_64, a Wayland session (Niri, Sway or Hyprland), your user in the `input` group (`sudo usermod -aG input "$USER"`, then log out and back in), and write access to `/dev/uinput` for that group (the installer prints the udev rule if it is missing).
+Requirements: Linux x86_64, a Wayland session (GNOME 46+, KDE Plasma 6, Niri, Sway or Hyprland), your user in the `input` group (`sudo usermod -aG input "$USER"`, then log out and back in), and write access to `/dev/uinput` for that group (the installer prints the udev rule if it is missing).
 
 ```sh
 curl -fsSL https://tippkraft.com/install.sh | sh
