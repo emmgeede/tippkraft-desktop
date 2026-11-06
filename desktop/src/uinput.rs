@@ -30,6 +30,8 @@ pub const LINKS_UMSCHALT: u16 = 42;
 pub const LINKS_STRG: u16 = 29;
 pub const RECHTS_ALT: u16 = 100;
 pub const EINFG: u16 = 110;
+/// ponytail: feste Pause für IBus (gemessen in der GNOME-Test-VM), kein Rückkanal vorhanden
+const IBUS_PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn taste(code: u16) -> Schritt {
     Schritt::Taste { code, umschalt: false, altgr: false }
@@ -303,11 +305,14 @@ pub fn ausfuehren(
             Schritt::Unicode(c) => {
                 let u = suchen(km, layout, xkb::Keysym::u).map(|(code, _, _)| code).ok_or("keine U-Taste im Layout")?;
                 drueck(u, true, false, true, senden);
+                // IBus braucht einen Moment, um in den Unicode-Modus zu wechseln und das Zeichen einzufügen
+                std::thread::sleep(IBUS_PAUSE);
                 for t in unicode_tasten(km, layout, *c) {
                     if let Schritt::Taste { code, umschalt, altgr } = t {
                         drueck(code, umschalt, altgr, false, senden);
                     }
                 }
+                std::thread::sleep(IBUS_PAUSE);
             }
             Schritt::Einfuegen(text) => {
                 ablage.setzen(text)?;
