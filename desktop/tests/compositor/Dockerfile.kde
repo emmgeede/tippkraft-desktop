@@ -1,0 +1,9 @@
+# F11: KWin ohne Bildschirm (virtuelles Backend) für Zwischenablage- und Fokus-Tests
+FROM fedora:44
+RUN dnf install -y --setopt=install_weak_deps=False kwin-wayland wl-clipboard foot dejavu-sans-mono-fonts dbus-daemon dbus-tools mesa-dri-drivers libcap && dnf clean all \
+ # Capability entfernen, sonst darf ein normaler Nutzer im Container kwin nicht starten
+ && setcap -r /usr/bin/kwin_wayland
+RUN useradd -m tester
+USER tester
+WORKDIR /home/tester
+ENTRYPOINT ["dbus-run-session", "--", "/test/kde.sh", "/test/tippkraft"]

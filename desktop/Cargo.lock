@@ -2649,8 +2649,10 @@ dependencies = [
  "sha2",
  "ureq",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-misc",
  "xkbcommon",
+ "zbus",
 ]
 
 [[package]]

@@ -56,6 +56,18 @@ fn main() {
             });
             Ok(())
         }
+        // F11: setzt die Zwischenablage über ext-data-control und stellt sie nach 3 s wieder her (Container-Test)
+        Some("ablage-test") => (|| {
+            use tippkraft::uinput::Zwischenablage;
+            let mut a = tippkraft::ablage::KdeAblage::starten()?;
+            a.setzen(args.get(1).map(String::as_str).unwrap_or("tippkraft"))?;
+            println!("gesetzt");
+            std::thread::sleep(Duration::from_secs(3));
+            a.zuruecksetzen();
+            println!("zurück");
+            std::thread::sleep(Duration::from_secs(3));
+            Ok(())
+        })(),
         Some("uebersicht" | "overview") => {
             let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok()).unwrap_or_default();
             tippkraft::uebersicht::zeigen(stand, &pfade.socket.with_file_name("tippkraft-uebersicht.lock"))
