@@ -35,7 +35,13 @@ struct Zustand {
     auswahl: Option<ExtDataControlOfferV1>,
     /// Was unsere eigene Quelle ausliefert
     liefern: HashMap<ObjectId, Inhalt>,
+    /// Wie oft ein Programm unseren Inhalt abgeholt hat
+    abgeholt: u64,
 }
+
+/// Höchstens so lange auf die Abholung warten, bevor die alte Zwischenablage zurückkommt.
+/// Thunderbird und Firefox brauchen deutlich länger als Terminals.
+pub const ABHOLUNG_MAX: Duration = Duration::from_millis(1000);
 
 enum Befehl {
     /// Text, optional HTML (F10)
@@ -87,10 +93,12 @@ fn schleife(conn: Connection, mut queue: EventQueue<Zustand>, mut z: Zustand, mg
     let qh = queue.handle();
     let mut gesichert: Inhalt = vec![];
     let mut gesichert_auswahl: Inhalt = vec![];
+    let mut abgeholt_vorher = 0;
     loop {
         pumpen(&conn, &mut queue, &mut z, 20);
         match rx.try_recv() {
             Ok(Befehl::Setzen(text, html, antwort)) => {
+                abgeholt_vorher = z.abgeholt;
                 gesichert = z.aktuell.clone().map(|o| lesen(&conn, &mut queue, &mut z, &o)).unwrap_or_default();
                 gesichert_auswahl = z.auswahl.clone().map(|o| lesen(&conn, &mut queue, &mut z, &o)).unwrap_or_default();
                 let mut inhalt: Inhalt = TEXT.iter().map(|m| (m.to_string(), text.as_bytes().to_vec())).collect();
@@ -105,6 +113,13 @@ fn schleife(conn: Connection, mut queue: EventQueue<Zustand>, mut z: Zustand, mg
                 let _ = antwort.send(Ok(()));
             }
             Ok(Befehl::Zurueck(antwort)) => {
+                // Erst zurückstellen, wenn das Programm abgeholt hat, sonst bekommt es den alten Inhalt oder nichts
+                let ende = std::time::Instant::now() + ABHOLUNG_MAX;
+                while z.abgeholt == abgeholt_vorher && std::time::Instant::now() < ende {
+                    pumpen(&conn, &mut queue, &mut z, 10);
+                }
+                // weitere Formate desselben Einfügens (erst text/html, dann text/plain)
+                pumpen(&conn, &mut queue, &mut z, 50);
                 for (inhalt, auswahl) in [(std::mem::take(&mut gesichert), false), (std::mem::take(&mut gesichert_auswahl), true)] {
                     if !inhalt.is_empty() {
                         anbieten(&mgr, &geraet, &qh, &mut z, inhalt, auswahl);
@@ -229,6 +244,7 @@ impl Dispatch<ExtDataControlSourceV1, ()> for Zustand {
                 if let Some((_, daten)) = z.liefern.get(&q.id()).and_then(|i| i.iter().find(|(m, _)| *m == mime_type)) {
                     let mut f = std::fs::File::from(OwnedFd::from(fd));
                     let _ = f.write_all(daten);
+                    z.abgeholt += 1;
                 }
             }
             source::Event::Cancelled => {

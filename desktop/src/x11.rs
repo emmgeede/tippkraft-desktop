@@ -164,6 +164,8 @@ struct Ablage {
     html: Atom,
     /// was wir pro Auswahl gerade ausliefern
     liefern: HashMap<Atom, Inhalt>,
+    /// wie oft ein Programm unseren Inhalt abgeholt hat
+    abgeholt: u64,
 }
 
 impl Ablage {
@@ -177,15 +179,17 @@ impl Ablage {
         let eigen = atom(&c, "TIPPKRAFT_ABLAGE")?;
         let html = atom(&c, "text/html")?;
         c.flush()?;
-        Ok(Ablage { c, win, sel, targets, eigen, text, html, liefern: HashMap::new() })
+        Ok(Ablage { c, win, sel, targets, eigen, text, html, liefern: HashMap::new(), abgeholt: 0 })
     }
 
     fn schleife(mut self, rx: Receiver<Befehl>) {
         let mut gesichert: [Inhalt; 2] = [vec![], vec![]];
+        let mut abgeholt_vorher = 0;
         loop {
             self.pumpen(Duration::from_millis(10));
             match rx.try_recv() {
                 Ok(Befehl::Setzen(text, html, antwort)) => {
+                    abgeholt_vorher = self.abgeholt;
                     let sel = self.sel;
                     gesichert = sel.map(|s| self.lesen(s));
                     let mut inhalt: Inhalt = self.text.iter().map(|t| (*t, text.as_bytes().to_vec())).collect();
@@ -197,6 +201,12 @@ impl Ablage {
                     let _ = antwort.send(r);
                 }
                 Ok(Befehl::Zurueck(antwort)) => {
+                    // erst zurückstellen, wenn das Programm abgeholt hat (siehe ablage::ABHOLUNG_MAX)
+                    let ende = Instant::now() + crate::ablage::ABHOLUNG_MAX;
+                    while self.abgeholt == abgeholt_vorher && Instant::now() < ende {
+                        self.pumpen(Duration::from_millis(10));
+                    }
+                    self.pumpen(Duration::from_millis(50));
                     for (s, inhalt) in self.sel.into_iter().zip(std::mem::take(&mut gesichert)) {
                         if inhalt.is_empty() {
                             self.liefern.remove(&s);
@@ -254,7 +264,11 @@ impl Ablage {
                 liste.push(self.targets);
                 self.c.change_property32(PropMode::REPLACE, r.requestor, prop, AtomEnum::ATOM, &liste).is_ok()
             }
-            Some(i) => i.iter().find(|(t, _)| *t == r.target).is_some_and(|(t, d)| self.c.change_property8(PropMode::REPLACE, r.requestor, prop, *t, d).is_ok()),
+            Some(i) => {
+                let ok = i.iter().find(|(t, _)| *t == r.target).is_some_and(|(t, d)| self.c.change_property8(PropMode::REPLACE, r.requestor, prop, *t, d).is_ok());
+                self.abgeholt += ok as u64;
+                ok
+            }
             None => false,
         };
         let ev = SelectionNotifyEvent { response_type: SELECTION_NOTIFY_EVENT, sequence: 0, time: r.time, requestor: r.requestor, selection: r.selection, target: r.target, property: if ok { prop } else { NONE } };
