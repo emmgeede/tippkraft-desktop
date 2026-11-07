@@ -10,8 +10,14 @@ pub struct Eintrag {
     pub bezeichnung: Option<String>,
     pub vorschau: String,
     pub aktiv: bool,
-    /// alles Durchsuchbare, kleingeschrieben
-    suchtext: String,
+    /// Inhalt in einer Zeile, für die Fundstelle in der Vorschau
+    zeile: String,
+}
+
+/// Suchergebnis: Eintrag und Vorschau (bei Treffer im Inhalt die Fundstelle)
+pub struct Treffer<'a> {
+    pub eintrag: &'a Eintrag,
+    pub vorschau: String,
 }
 
 fn ausloeser_name(s: Sprache, a: Ausloeser) -> &'static str {
@@ -28,8 +34,18 @@ fn ausloeser_name(s: Sprache, a: Ausloeser) -> &'static str {
 
 /// Kurzer Hinweis wie im Webtool (`auszug` in web/src/lib/bausteine.ts): eine Zeile, höchstens 80 Zeichen
 fn vorschau(inhalt: &str) -> String {
-    let eine = inhalt.split_whitespace().collect::<Vec<_>>().join(" ");
-    if eine.chars().count() > 80 { format!("{}…", eine.chars().take(80).collect::<String>()) } else { eine }
+    ausschnitt(&einzeilig(inhalt), 0)
+}
+
+fn einzeilig(inhalt: &str) -> String {
+    inhalt.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// 80 Zeichen ab `start` (in Zeichen), mit … an abgeschnittenen Enden
+fn ausschnitt(eine: &str, start: usize) -> String {
+    let n = eine.chars().count();
+    let teil: String = eine.chars().skip(start).take(80).collect();
+    format!("{}{}{}", if start > 0 { "…" } else { "" }, teil, if start + 80 < n { "…" } else { "" })
 }
 
 /// Aktive zuerst, dann deaktivierte, jeweils alphabetisch
@@ -43,16 +59,38 @@ pub fn eintraege(stand: &Stand, s: Sprache) -> Vec<Eintrag> {
             bezeichnung: b.bezeichnung.clone(),
             vorschau: vorschau(&b.inhalt),
             aktiv: b.aktiv,
-            suchtext: format!("{}\n{}\n{}", b.kuerzel, b.bezeichnung.as_deref().unwrap_or_default(), b.inhalt).to_lowercase(),
+            zeile: einzeilig(&b.inhalt),
         })
         .collect();
     e.sort_by_key(|x| (!x.aktiv, x.kuerzel.to_lowercase()));
     e
 }
 
-pub fn filtern<'a>(e: &'a [Eintrag], suche: &str) -> Vec<&'a Eintrag> {
+/// Treffer im Kürzel zuerst, dann in der Bezeichnung, dann im Inhalt (mit Fundstelle in der Vorschau).
+/// Innerhalb einer Stufe bleibt die Reihenfolge der Liste (aktive zuerst, alphabetisch).
+pub fn filtern<'a>(e: &'a [Eintrag], suche: &str) -> Vec<Treffer<'a>> {
     let q = suche.trim().to_lowercase();
-    e.iter().filter(|x| q.is_empty() || x.suchtext.contains(&q)).collect()
+    if q.is_empty() {
+        return e.iter().map(|x| Treffer { eintrag: x, vorschau: x.vorschau.clone() }).collect();
+    }
+    let mut out: Vec<(u8, Treffer<'a>)> = e
+        .iter()
+        .filter_map(|x| {
+            if x.kuerzel.to_lowercase().contains(&q) {
+                return Some((0, Treffer { eintrag: x, vorschau: x.vorschau.clone() }));
+            }
+            if x.bezeichnung.as_deref().is_some_and(|b| b.to_lowercase().contains(&q)) {
+                return Some((1, Treffer { eintrag: x, vorschau: x.vorschau.clone() }));
+            }
+            // Fundstelle in Zeichen; Kleinschreibung ändert die Zeichenzahl fast nie, sonst Anfang zeigen
+            let klein = x.zeile.to_lowercase();
+            let pos = klein.find(&q)?;
+            let start = if klein.chars().count() == x.zeile.chars().count() { klein[..pos].chars().count().saturating_sub(25) } else { 0 };
+            Some((2, Treffer { eintrag: x, vorschau: ausschnitt(&x.zeile, start) }))
+        })
+        .collect();
+    out.sort_by_key(|(stufe, _)| *stufe);
+    out.into_iter().map(|(_, t)| t).collect()
 }
 
 struct App {
@@ -105,7 +143,8 @@ impl eframe::App for App {
             }
             let aus = egui::ScrollArea::vertical().auto_shrink(false).vertical_scroll_offset(self.scroll).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                for e in &treffer {
+                for t in &treffer {
+                    let e = t.eintrag;
                     let kuerzel_farbe = if e.aktiv { f.accent } else { f.muted };
                     let text_farbe = if e.aktiv { f.fg } else { f.muted };
                     egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 8)).show(ui, |ui| {
@@ -121,7 +160,7 @@ impl eframe::App for App {
                             });
                         });
                         // immer genau eine Zeile, auch wenn das Fenster schmal ist
-                        ui.add(egui::Label::new(RichText::new(&e.vorschau).monospace().color(f.muted).size(13.0)).truncate());
+                        ui.add(egui::Label::new(RichText::new(&t.vorschau).monospace().color(f.muted).size(13.0)).truncate());
                     });
                     let y = ui.cursor().top();
                     ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, f.border));
@@ -212,10 +251,30 @@ mod tests {
             bausteine: vec![b("mfg", "Mit freundlichen Grüßen", None, true), b("adr", "Musterstraße", Some("Adresse"), true), b("sig", "Viele GRÜSSE", None, false)],
             ausschluesse: vec![],
         });
-        let k = |q: &str| filtern(&e, q).iter().map(|x| x.kuerzel.clone()).collect::<Vec<_>>();
+        let k = |q: &str| filtern(&e, q).iter().map(|x| x.eintrag.kuerzel.clone()).collect::<Vec<_>>();
         assert_eq!(k("grüß"), ["mfg"]);
         assert_eq!(k("ADRESSE"), ["adr"]);
         assert_eq!(k("sig"), ["sig"]);
         assert_eq!(k("  "), ["adr", "mfg", "sig"], "leere Suche zeigt alles");
+    }
+
+    #[test]
+    fn treffer_im_kuerzel_zuerst_und_vorschau_zeigt_die_fundstelle() {
+        let lang = "Liebe Anna, ich würde dich gerne näher kennen lernen. Eventuell hast du Lust, am Montag einen Test mitzumachen, der nur kurz dauert.";
+        let e = eintraege_de(&Stand {
+            sprache: None,
+            desktop_version: None,
+            version: 2,
+            bausteine: vec![b("brief", lang, Some("Anschreiben"), true), b("xtest", "kurz", None, true), b("ok", "passt", Some("Testantwort"), true)],
+            ausschluesse: vec![],
+        });
+        let t = filtern(&e, "test");
+        // Kürzel vor Bezeichnung vor Inhalt
+        assert_eq!(t.iter().map(|x| x.eintrag.kuerzel.as_str()).collect::<Vec<_>>(), ["xtest", "ok", "brief"]);
+        // bei einem Treffer im Inhalt steht die Fundstelle in der Vorschau
+        assert!(t[2].vorschau.starts_with('…') && t[2].vorschau.contains("einen Test mitzumachen"), "{}", t[2].vorschau);
+        // ohne Suche und bei Treffer im Kürzel: Anfang wie bisher
+        assert_eq!(t[0].vorschau, "kurz");
+        assert!(filtern(&e, "").iter().find(|x| x.eintrag.kuerzel == "brief").unwrap().vorschau.starts_with("Liebe Anna"));
     }
 }

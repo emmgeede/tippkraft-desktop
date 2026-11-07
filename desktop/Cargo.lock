@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "tippkraft"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "base64",
  "chrono",
