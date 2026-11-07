@@ -186,7 +186,9 @@ impl Engine {
             let getippt: String = p[start..].iter().collect();
             let gleich = if b.gross_klein_beachten { getippt == b.kuerzel } else { getippt.to_lowercase() == b.kuerzel.to_lowercase() };
             let grenze = !b.wortgrenze || start == 0 || !p[start - 1].is_alphanumeric();
-            (gleich && grenze).then(|| (b.clone(), getippt))
+            // Nach "{{" schreibt man einen Verweis auf den Baustein, kein Kürzel zum Ersetzen
+            let verweis = start >= 2 && p[start - 2] == '{' && p[start - 1] == '{';
+            (gleich && grenze && !verweis).then(|| (b.clone(), getippt))
         })
     }
 
@@ -658,5 +660,15 @@ mod tests {
     fn formatierter_baustein_mit_abfrage_geht_ins_popup_f10() {
         let mut e = engine(vec![fmt("brief", "<p>Hallo {{?Name}}</p>", "Hallo {{?Name}}")]);
         assert!(matches!(tippe(&mut e, "brief ").last(), Some(Entscheidung::Popup { html: Some(h), .. }) if h == "<p>Hallo {{?Name}}</p>"));
+    }
+
+    #[test]
+    fn verweis_schreiben_loest_nicht_aus() {
+        // Wer {{kuerzel}} als Verweis schreibt (z. B. im Webtool), will den Baustein nicht einfügen
+        let mut e = engine(vec![b("iban", "DE02", Ausloeser::Sofort), b("mfg", "Gruß", Ausloeser::Leertaste)]);
+        assert_eq!(tippe(&mut e, "{{iban").last(), Some(&Durchlassen));
+        assert_eq!(tippe(&mut e, "}} {{mfg ").last(), Some(&Durchlassen));
+        // ohne Klammern wie bisher
+        assert_eq!(tippe(&mut e, " iban").last(), Some(&ersetzt(3, "DE02")));
     }
 }
