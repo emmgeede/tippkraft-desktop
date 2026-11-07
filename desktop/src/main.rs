@@ -285,6 +285,17 @@ fn greifen(fd: &OwnedFd, an: bool) -> std::io::Result<()> {
     unsafe { rustix::ioctl::ioctl(fd, rustix::ioctl::IntegerSetter::<EVIOCGRAB>::new_usize(an as usize)) }.map_err(Into::into)
 }
 
+/// Ist an der Tastatur gerade eine Taste gedrückt? Fragt den Kernel (EVIOCGKEY), nicht die eigene Zählung,
+/// die nach verpassten Ereignissen eine Taste für immer als gedrückt führen kann.
+fn taste_gedrueckt(fd: &OwnedFd) -> bool {
+    const EVIOCGKEY: rustix::ioctl::Opcode = rustix::ioctl::opcode::read::<[u8; 96]>(b'E', 0x18);
+    // SAFETY: EVIOCGKEY schreibt höchstens 96 Bytes (KEY_MAX = 0x2ff) in den Puffer
+    match unsafe { rustix::ioctl::ioctl(fd, rustix::ioctl::Getter::<EVIOCGKEY, [u8; 96]>::new()) } {
+        Ok(bits) => bits.iter().any(|b| *b != 0),
+        Err(_) => false,
+    }
+}
+
 /// Übernimmt die Tastatur erst, wenn keine Taste mehr gedrückt ist, sonst bleibt eine Taste "hängen"
 fn uebernehmen(d: &mut Device) -> std::io::Result<()> {
     let ende = Instant::now() + Duration::from_secs(5);
@@ -544,7 +555,9 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             }
         }
         // Fortsetzen erst, wenn keine Taste mehr gedrückt ist (sonst bleiben z. B. Mod+Alt hängen)
-        if greifen_ausstehend && gedrueckt.is_empty() {
+        // Fortsetzen: echter Tastenzustand entscheidet, die Zählung wird danach neu aufgebaut
+        if greifen_ausstehend && !griffe.iter().any(taste_gedrueckt) {
+            gedrueckt.clear();
             for g in &griffe {
                 let _ = greifen(g, true);
             }

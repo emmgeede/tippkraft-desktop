@@ -137,10 +137,18 @@ impl eframe::App for App {
 
 /// Öffnet die Übersicht. Läuft schon eine, passiert nichts (AC-8).
 pub fn zeigen(stand: Stand, sperrdatei: &std::path::Path) -> Result<(), String> {
-    let datei = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(sperrdatei).map_err(|e| e.to_string())?;
+    use std::io::{Read, Seek, Write};
+    let mut datei = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(sperrdatei).map_err(|e| e.to_string())?;
     if rustix::fs::flock(&datei, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
+        // Schon offen: das Kürzel schaltet um, also das offene Fenster schließen
+        let mut pid = String::new();
+        let _ = datei.read_to_string(&mut pid);
+        if let Some(p) = pid.trim().parse::<i32>().ok().and_then(rustix::process::Pid::from_raw) {
+            let _ = rustix::process::kill_process(p, rustix::process::Signal::TERM);
+        }
         return Ok(());
     }
+    let _ = datei.set_len(0).and_then(|_| datei.rewind()).and_then(|_| write!(datei, "{}", std::process::id()));
     let app = App { eintraege: eintraege(&stand, crate::i18n::aktuell()), suche: String::new(), scroll: 0.0 };
     let optionen = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_app_id(crate::engine::UEBERSICHT_APP_ID).with_title("tippkraft · Bausteine").with_inner_size([640.0, 560.0]),
