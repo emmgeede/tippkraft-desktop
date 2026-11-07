@@ -141,8 +141,35 @@ pub fn unicode_tasten(km: &xkb::Keymap, layout: u32, c: char) -> Vec<Schritt> {
     out
 }
 
+/// F10: Einfügen per Tastenkürzel. Terminals fügen mit Umschalt+Einfg ein (Strg+V wäre dort ein Steuerzeichen),
+/// grafische Programme wie Thunderbird oder Firefox reagieren darauf unter Wayland nicht und brauchen Strg+V.
+/// Unbekanntes Programm (z. B. GNOME ohne Fensterinfo): Umschalt+Einfg wie bisher.
+pub static STRG_V: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// ponytail: Liste bekannter Terminals nach Fensterklasse/app_id, erweitern bei Bedarf
+pub fn ist_terminal(app: &str) -> bool {
+    let a = app.to_lowercase();
+    ["term", "foot", "kitty", "alacritty", "ghostty", "konsole", "ptyxis", "tilix", "urxvt", "contour", "yakuake", "guake", "st-256color", "console", "rio"].iter().any(|t| a.contains(t))
+}
+
+/// Strg+V nur bei bekanntem Programm, das kein Terminal ist
+pub fn strg_v_fuer(app: Option<&str>) -> bool {
+    app.is_some_and(|a| !ist_terminal(a))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn einfuegen_mit_strg_v_ausser_in_terminals_f10() {
+        for t in ["foot", "kitty", "Alacritty", "org.gnome.Ptyxis", "org.kde.konsole", "XTerm", "Gnome-terminal", "com.mitchellh.ghostty", "org.wezfurlong.wezterm"] {
+            assert!(!strg_v_fuer(Some(t)), "{t}");
+        }
+        for g in ["thunderbird", "org.mozilla.thunderbird", "firefox", "libreoffice-writer", "code", "org.gnome.TextEditor"] {
+            assert!(strg_v_fuer(Some(g)), "{g}");
+        }
+        assert!(!strg_v_fuer(None));
+    }
+
     use super::*;
 
     fn keymap(layout: &str) -> xkb::Keymap {
@@ -346,7 +373,11 @@ pub fn ausfuehren(
                     Schritt::Einfuegen(text) => ablage.setzen(text)?,
                     _ => unreachable!(),
                 }
-                drueck(EINFG, true, false, false, senden);
+                // F10: grafische Programme brauchen Strg+V (Taste "v" im aktuellen Layout), Terminals Umschalt+Einfg
+                match suchen(km, layout, xkb::Keysym::v).filter(|_| STRG_V.load(std::sync::atomic::Ordering::Relaxed)) {
+                    Some((v, _, _)) => drueck(v, false, false, true, senden),
+                    None => drueck(EINFG, true, false, false, senden),
+                }
                 // Die App holt den Inhalt asynchron ab. ponytail: feste Wartezeit statt Abholung abzuwarten
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 ablage.zuruecksetzen();

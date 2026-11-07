@@ -118,6 +118,10 @@ fn schleife(conn: Connection, mut queue: EventQueue<Zustand>, mut z: Zustand, mg
                 while z.abgeholt == abgeholt_vorher && std::time::Instant::now() < ende {
                     pumpen(&conn, &mut queue, &mut z, 10);
                 }
+                if z.abgeholt == abgeholt_vorher {
+                    // Fehlersuche: das Programm hat das Einfügen-Tastenkürzel nicht als Einfügen verstanden
+                    eprintln!("tippkraft: Zwischenablage wurde nicht abgeholt (nach {} ms zurückgestellt)", ABHOLUNG_MAX.as_millis());
+                }
                 // weitere Formate desselben Einfügens (erst text/html, dann text/plain)
                 pumpen(&conn, &mut queue, &mut z, 50);
                 for (inhalt, auswahl) in [(std::mem::take(&mut gesichert), false), (std::mem::take(&mut gesichert_auswahl), true)] {

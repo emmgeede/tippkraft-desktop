@@ -650,6 +650,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 continue;
             }
             Ereignis::Fokus(app) => {
+                tippkraft::uinput::STRG_V.store(tippkraft::uinput::strg_v_fuer(app.as_deref()), std::sync::atomic::Ordering::Relaxed);
                 engine.fokus(app.as_deref());
                 continue;
             }

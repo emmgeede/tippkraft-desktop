@@ -72,7 +72,12 @@ impl Wayland {
     /// `loeschen`-mal Backspace, dann die Aktionen tippen. `lebt` wird pro Taste aufgerufen (Watchdog).
     pub fn tippen(&mut self, loeschen: usize, aktionen: &[Aktion], verzoegerung: Duration, lebt: impl Fn()) -> Result<(), String> {
         let vk = self.vk.as_ref().ok_or("keine virtuelle Tastatur")?;
-        let folge = tastenfolge(loeschen, aktionen);
+        // F10: Einfügen ist Umschalt+Einfg, in grafischen Programmen Strg+V (siehe uinput::STRG_V)
+        let strg_v = crate::uinput::STRG_V.load(std::sync::atomic::Ordering::Relaxed);
+        let folge: Vec<(xkb::Keysym, u32)> = tastenfolge(loeschen, aktionen)
+            .into_iter()
+            .map(|(s, u)| if strg_v && u && s == xkb::Keysym::Insert { (xkb::Keysym::v, CTRL) } else { (s, if u { SHIFT } else { 0 }) })
+            .collect();
         if folge.is_empty() {
             return Ok(());
         }
@@ -89,16 +94,16 @@ impl Wayland {
         datei.write_all(keymap.as_bytes()).and_then(|_| datei.write_all(&[0])).map_err(|e| e.to_string())?;
         vk.keymap(xkb::KEYMAP_FORMAT_TEXT_V1, datei.as_fd(), keymap.len() as u32 + 1);
         vk.modifiers(0, 0, 0, 0);
-        for (s, umschalt) in folge {
+        for (s, mods) in folge {
             lebt();
             let code = symbole.iter().position(|x| *x == s).unwrap() as u32 + 1; // evdev-Code = xkb-Code - 8
             let t = self.start.elapsed().as_millis() as u32;
-            if umschalt {
-                vk.modifiers(SHIFT, 0, 0, 0);
+            if mods != 0 {
+                vk.modifiers(mods, 0, 0, 0);
             }
             vk.key(t, code, 1);
             vk.key(t, code, 0);
-            if umschalt {
+            if mods != 0 {
                 vk.modifiers(0, 0, 0, 0);
             }
             self.conn.flush().map_err(|e| e.to_string())?;
@@ -128,8 +133,9 @@ fn taste_symbol(t: Taste) -> xkb::Keysym {
     }
 }
 
-/// Modifier-Maske für Umschalt im xkb-Standard ("complete")
+/// Modifier-Masken im xkb-Standard ("complete")
 const SHIFT: u32 = 1;
+const CTRL: u32 = 4;
 
 /// Tasten mit Umschalt-Flag. Ein Zeilenumbruch im Text wird Umschalt+Eingabe: Chats wie Messenger,
 /// Slack oder WhatsApp schicken bei reiner Eingabetaste ab. Nur [[Enter]] tippt die echte Eingabetaste.
