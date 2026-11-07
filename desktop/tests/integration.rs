@@ -511,6 +511,7 @@ fn einrichten_installiert_und_aktiviert_ac13() {
     for _ in 0..2 {
         let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
             .arg("einrichten")
+            .env("TIPPKRAFT_ANTWORT", "n")
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
@@ -548,6 +549,7 @@ fn einrichten_ohne_verbindung_startet_verbinden_f12_ac16() {
     std::fs::set_permissions(&browser, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let mut kind = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
         .arg("einrichten")
+        .env("TIPPKRAFT_ANTWORT", "n")
         .env("HOME", &home)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
@@ -692,6 +694,7 @@ fn einrichten_unter_x11_nennt_tastenkuerzel_und_legt_autostart_an_f36_ac6() {
     for (desktop, weg) in [("XFCE", "Xfce: Einstellungen → Tastatur"), ("X-Cinnamon", "Cinnamon: Systemeinstellungen → Tastatur")] {
         let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
             .arg("einrichten")
+            .env("TIPPKRAFT_ANTWORT", "n")
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
@@ -711,4 +714,38 @@ fn einrichten_unter_x11_nennt_tastenkuerzel_und_legt_autostart_an_f36_ac6() {
     }
     let auto = std::fs::read_to_string(home.join(".config/autostart/tippkraft.desktop")).unwrap();
     assert!(auto.contains("Exec=systemctl --user start tippkraft.service"));
+}
+
+#[test]
+fn einrichten_legt_tastenkuerzel_fuer_niri_an_und_fragt_nur_einmal_f43() {
+    let home = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("home-einrichten-niri");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".config/tippkraft")).unwrap();
+    std::fs::create_dir_all(home.join(".config/niri")).unwrap();
+    std::fs::write(home.join(".config/tippkraft/zugang.json"), r#"{"server":"http://localhost:4321","token":"tk_x"}"#).unwrap();
+    std::fs::write(home.join(".config/niri/config.kdl"), "binds {\n    Mod+Q { close-window; }\n}\n").unwrap();
+    let fake = home.join("systemctl");
+    std::fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let lauf = |antwort: Option<&str>| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_tippkraft"));
+        c.arg("einrichten").env("HOME", &home).env_remove("XDG_CONFIG_HOME").env_remove("XDG_DATA_HOME").env_remove("SWAYSOCK").env_remove("HYPRLAND_INSTANCE_SIGNATURE").env("NIRI_SOCKET", "/nicht/da").env("TIPPKRAFT_SYSTEMCTL", &fake).env("TIPPKRAFT_SPRACHE", "de").stdin(Stdio::null());
+        match antwort {
+            Some(a) => c.env("TIPPKRAFT_ANTWORT", a),
+            None => c.env_remove("TIPPKRAFT_ANTWORT"),
+        };
+        let out = c.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let text = lauf(Some(""));
+    assert!(text.contains("Tastenkürzel eingerichtet: Mod+Alt+T, Mod+Alt+Leertaste"), "{text}");
+    let datei = std::fs::read_to_string(home.join(".config/niri/tippkraft-tasten.kdl")).unwrap();
+    assert!(datei.contains("Mod+Alt+T") && datei.contains("\"overview\""));
+    assert!(std::fs::read_to_string(home.join(".config/niri/config.kdl")).unwrap().ends_with("include \"tippkraft-tasten.kdl\"\n"));
+    assert_eq!(std::fs::read_to_string(home.join(".config/tippkraft/tastenkuerzel")).unwrap(), "ja");
+    // Update über den Installer: keine Frage, keine Zeilen, nichts doppelt
+    let text = lauf(None);
+    assert!(!text.contains("Tastenkürzel"), "{text}");
+    assert_eq!(std::fs::read_to_string(home.join(".config/niri/config.kdl")).unwrap().matches("tippkraft-tasten.kdl").count(), 1);
 }

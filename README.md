@@ -20,7 +20,7 @@ The script downloads the latest release from this repository, verifies its SHA-2
 - `tippkraft pause` pauses or resumes. Emergency stop: left Ctrl + left Alt + Backspace.
 - `tippkraft overview` shows all snippets with a search field.
 - `tippkraft connect` connects the app to your account again.
-- Keyboard shortcuts: `tippkraft setup` prints ready-made lines for your desktop, Mod+Alt+T for pause and Mod+Alt+Space for all snippets.
+- Keyboard shortcuts: Mod+Alt+T pauses, Mod+Alt+Space shows all snippets. `tippkraft setup` asks once and sets them up on GNOME, KDE Plasma, Cinnamon, Xfce, Niri, Sway and Hyprland (`hyprland.conf`). It never overwrites a combination that is already taken. Elsewhere, or if you said no, it prints the lines to add yourself. `tippkraft setup --tastenkuerzel` asks again.
 - Tray icon: left click pauses, right click opens the menu with pause, all snippets and more.
 
 ## What it does with your keyboard

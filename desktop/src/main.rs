@@ -45,7 +45,7 @@ fn main() {
         Some("login") => Err(format!("{}\n\n{}", tr(T::LoginWeg), tr(T::Hilfe))),
         Some("status") => status(&pfade),
         Some("pause") => pause(&pfade),
-        Some("einrichten" | "setup") => einrichten(),
+        Some("einrichten" | "setup") => einrichten(&args[1..]),
         Some("popup") => popup(),
         // F22: zeigt jeden erkannten Fensterwechsel (Fehlersuche, Container-Tests)
         Some("fokus") => {
@@ -142,6 +142,85 @@ fn verbinden(pfade: &Pfade, args: &[String]) -> Result<(), String> {
     }
 }
 
+/// F43: einmal fragen (über das Terminal, auch bei `curl | sh`), Antwort merken, einrichten oder Zeilen ausgeben
+fn tastenkuerzel(home: &std::path::Path, ziel: &std::path::Path, erneut: bool) {
+    let merker = home.join(".config/tippkraft/tastenkuerzel");
+    let alt = std::fs::read_to_string(&merker).ok();
+    let antwort = match (alt.as_deref().map(str::trim), erneut) {
+        (Some("ja"), false) => return,
+        (Some("nein"), false) => None,
+        _ => frage_tastenkuerzel(),
+    };
+    let Some(ja) = antwort else { return tastenkuerzel_zeilen(home, ziel) };
+    let _ = std::fs::create_dir_all(merker.parent().unwrap());
+    let _ = std::fs::write(&merker, if ja { "ja" } else { "nein" });
+    if !ja {
+        return tastenkuerzel_zeilen(home, ziel);
+    }
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let namen = |v: &[&str]| v.iter().map(|n| if *n == "pause" { "Mod+Alt+T" } else if i18n::aktuell() == Sprache::De { "Mod+Alt+Leertaste" } else { "Mod+Alt+Space" }).collect::<Vec<_>>().join(", ");
+    match tippkraft::kuerzel::einrichten(env, home, &ziel.display().to_string(), &mut tippkraft::kuerzel::System) {
+        Ok(e) => {
+            if !e.eingerichtet.is_empty() {
+                println!("{}", i18n::f(i18n::aktuell(), T::KuerzelEingerichtet, &[&namen(&e.eingerichtet)]));
+            }
+            if !e.belegt.is_empty() {
+                println!("{}", i18n::f(i18n::aktuell(), T::KuerzelBelegt, &[&namen(&e.belegt)]));
+            }
+        }
+        Err(grund) => {
+            // nicht als "ja" merken, damit der nächste Lauf es erneut versucht
+            let _ = std::fs::remove_file(&merker);
+            println!("{}", i18n::f(i18n::aktuell(), T::KuerzelFehler, &[&grund]));
+            tastenkuerzel_zeilen(home, ziel);
+        }
+    }
+}
+
+/// Ja/Nein vom Terminal. None: kein Terminal (z. B. Dienst, Test). TIPPKRAFT_ANTWORT ersetzt die Eingabe in Tests.
+fn frage_tastenkuerzel() -> Option<bool> {
+    use std::io::{BufRead, Write};
+    let zeile = match std::env::var("TIPPKRAFT_ANTWORT") {
+        Ok(a) => a,
+        Err(_) => {
+            let mut tty = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?;
+            write!(tty, "\n{}", tr(T::KuerzelFrage)).ok()?;
+            tty.flush().ok()?;
+            let mut z = String::new();
+            std::io::BufReader::new(tty).read_line(&mut z).ok()?;
+            z
+        }
+    };
+    let z = zeile.trim().to_lowercase();
+    Some(z.is_empty() || z.starts_with('j') || z.starts_with('y'))
+}
+
+/// Bisheriger Weg (F22, F11, F36): Zeilen bzw. Weg in den Einstellungen zum Selbsteintragen
+fn tastenkuerzel_zeilen(home: &std::path::Path, ziel: &std::path::Path) {
+    if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
+        let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string(), home.join(".config/hypr/hyprland.lua").exists());
+        if q == tippkraft::fokus::Quelle::X11 {
+            // F36 AC-6: eigene Tastenkürzel liegen je Desktop woanders
+            let de = i18n::aktuell() == Sprache::De;
+            let weg = match std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase() {
+                d if d.contains("XFCE") => if de { "Xfce: Einstellungen → Tastatur → Tastenkürzel für Anwendungen → Hinzufügen" } else { "Xfce: Settings → Keyboard → Application Shortcuts → Add" },
+                _ => if de { "Cinnamon: Systemeinstellungen → Tastatur → Tastenkombinationen → Benutzerdefinierte Tastenkombination hinzufügen" } else { "Cinnamon: System Settings → Keyboard → Shortcuts → Add custom shortcut" },
+            };
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
+        } else if q == tippkraft::fokus::Quelle::Kde {
+            // F11 AC-10: KDE hat keine Konfigurationsdatei dafür, also der Weg in den Systemeinstellungen
+            let weg = if i18n::aktuell() == Sprache::De { "Systemeinstellungen → Tastatur → Kurzbefehle → Neu → Befehl oder Skript" } else { "System Settings → Keyboard → Shortcuts → Add New → Command or Script" };
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
+        } else {
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
+        }
+    } else if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
+        let weg = if i18n::aktuell() == Sprache::De { "Einstellungen → Tastatur → Tastenkürzel anzeigen und anpassen → Eigene Tastenkürzel" } else { "Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts" };
+        let bin = ziel.display();
+        println!("\n{}\n\nSuper+Alt+T: {bin} pause\nSuper+Alt+Space: {bin} overview\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&"GNOME", &weg]));
+    }
+}
+
 const RELEASES: &str = "https://github.com/emmgeede/tippkraft-desktop/releases/latest";
 const INSTALLIEREN: &str = "curl -fsSL https://tippkraft.com/install.sh | sh";
 
@@ -187,7 +266,7 @@ RestartSec=2
 WantedBy=graphical-session.target
 ";
 
-fn einrichten() -> Result<(), String> {
+fn einrichten(args: &[String]) -> Result<(), String> {
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME nicht gesetzt")?);
     let ziel = home.join(".local/bin/tippkraft");
     let quelle = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -220,28 +299,9 @@ fn einrichten() -> Result<(), String> {
     std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} connect\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
     println!("{}", i18n::f(i18n::aktuell(), T::Eingerichtet, &[&ziel.display()]));
-    // F22 AC-5: Tastenkürzel für den laufenden Compositor zum Kopieren
-    if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
-        let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string(), home.join(".config/hypr/hyprland.lua").exists());
-        if q == tippkraft::fokus::Quelle::X11 {
-            // F36 AC-6: eigene Tastenkürzel liegen je Desktop woanders
-            let de = i18n::aktuell() == Sprache::De;
-            let weg = match std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase() {
-                d if d.contains("XFCE") => if de { "Xfce: Einstellungen → Tastatur → Tastenkürzel für Anwendungen → Hinzufügen" } else { "Xfce: Settings → Keyboard → Application Shortcuts → Add" },
-                _ => if de { "Cinnamon: Systemeinstellungen → Tastatur → Tastenkombinationen → Benutzerdefinierte Tastenkombination hinzufügen" } else { "Cinnamon: System Settings → Keyboard → Shortcuts → Add custom shortcut" },
-            };
-            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
-        } else if q == tippkraft::fokus::Quelle::Kde {
-            // F11 AC-10: KDE hat keine Konfigurationsdatei dafür, also der Weg in den Systemeinstellungen
-            let weg = if i18n::aktuell() == Sprache::De { "Systemeinstellungen → Tastatur → Kurzbefehle → Neu → Befehl oder Skript" } else { "System Settings → Keyboard → Shortcuts → Add New → Command or Script" };
-            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
-        } else {
-            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
-        }
-    } else if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
-        let weg = if i18n::aktuell() == Sprache::De { "Einstellungen → Tastatur → Tastenkürzel anzeigen und anpassen → Eigene Tastenkürzel" } else { "Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts" };
-        let bin = ziel.display();
-        println!("\n{}\n\nSuper+Alt+T: {bin} pause\nSuper+Alt+Space: {bin} overview\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&"GNOME", &weg]));
+    // F43: Tastenkürzel nach einmaliger Rückfrage einrichten, sonst wie bisher zum Kopieren ausgeben
+    tastenkuerzel(&home, &ziel, args.iter().any(|a| a == "--tastenkuerzel"));
+    if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
         println!("{}\n{}\n", tr(T::AusschlussGnome), tr(T::TrayGnome));
     }
     let pfade = Pfade::aus_umgebung();
