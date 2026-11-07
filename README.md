@@ -18,8 +18,10 @@ The script downloads the latest release from this repository, verifies its SHA-2
 
 - `tippkraft status` shows state, connection and whether an update is available.
 - `tippkraft pause` pauses or resumes. Emergency stop: left Ctrl + left Alt + Backspace.
+- `tippkraft overview` shows all snippets with a search field.
 - `tippkraft connect` connects the app to your account again.
-- Tray icon: left click pauses, middle click shows all snippets.
+- Keyboard shortcuts: `tippkraft setup` prints ready-made lines for your desktop, Mod+Alt+T for pause and Mod+Alt+Space for all snippets.
+- Tray icon: left click pauses, right click opens the menu with pause, all snippets and more.
 
 ## What it does with your keyboard
 
