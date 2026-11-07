@@ -31,7 +31,7 @@ enum Ereignis {
     Steuerung(String, Sender<String>),
     /// Popup geschlossen: Werte oder `None` bei Abbruch (F8)
     Tray(tippkraft::tray::TrayAktion),
-    PopupFertig { werte: Option<std::collections::HashMap<String, String>>, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion> },
+    PopupFertig { werte: Option<std::collections::HashMap<String, String>>, loeschen: usize, inhalt: String, html: Option<String>, gross: bool, abbruch: Vec<Aktion> },
 }
 
 fn main() {
@@ -96,7 +96,8 @@ fn popup() -> Result<(), String> {
 }
 
 /// Startet das Popup als eigenen Prozess, damit die Hauptschleife (Tastenweitergabe, Watchdog) weiterläuft
-fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion>, auto: tippkraft::format::Automatisch) {
+#[allow(clippy::too_many_arguments)]
+fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, html: Option<String>, gross: bool, abbruch: Vec<Aktion>, auto: tippkraft::format::Automatisch) {
     std::thread::spawn(move || {
         let programm = std::env::var_os("TIPPKRAFT_POPUP").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| "tippkraft".into());
         let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum: auto.datum, zwischenablage: auto.zwischenablage, jetzt: auto.jetzt, de: auto.de }).unwrap();
@@ -109,7 +110,7 @@ fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: S
             }
             serde_json::from_slice::<tippkraft::popup::Antwort>(&out.stdout).ok().map(|a| a.werte)
         })();
-        let _ = tx.send(Ereignis::PopupFertig { werte, loeschen, inhalt, gross, abbruch });
+        let _ = tx.send(Ereignis::PopupFertig { werte, loeschen, inhalt, html, gross, abbruch });
     });
 }
 
@@ -381,9 +382,36 @@ fn ausgeben(
     verzoegerung: Duration,
     lebt: &dyn Fn(),
 ) -> Result<(), String> {
-    use tippkraft::uinput::{Fremd, Sitzung, aktuelles_layout, ausfuehren, plan};
+    use tippkraft::uinput::{Fremd, Sitzung, aktuelles_layout, ausfuehren, ohne_html, plan};
+    // F10 AC-13: ohne Zwischenablage den reinen Text tippen
+    let ersatz;
+    let aktionen = if ablage.vorhanden() {
+        aktionen
+    } else {
+        ersatz = ohne_html(aktionen);
+        &ersatz[..]
+    };
     if let Some(wl) = wl.filter(|_| sitzung == Sitzung::Wlroots) {
-        return wl.tippen(loeschen, aktionen, verzoegerung, lebt);
+        // F10: formatierte Abschnitte über die Zwischenablage, dazwischen normal tippen
+        let mut loeschen = loeschen;
+        for teil in aktionen.chunk_by(|a, b| matches!(a, Aktion::Html { .. }) == matches!(b, Aktion::Html { .. })) {
+            if let [Aktion::Html { .. }, ..] = teil {
+                for a in teil {
+                    if let Aktion::Html { html, text } = a {
+                        ablage.setzen_html(html, text)?;
+                        wl.tippen(loeschen, std::slice::from_ref(a), verzoegerung, lebt)?;
+                        loeschen = 0;
+                        // Die App holt den Inhalt asynchron ab. ponytail: feste Wartezeit wie bei uinput
+                        std::thread::sleep(Duration::from_millis(150));
+                        ablage.zuruecksetzen();
+                    }
+                }
+            } else {
+                wl.tippen(loeschen, teil, verzoegerung, lebt)?;
+                loeschen = 0;
+            }
+        }
+        return Ok(());
     }
     let dev = weitergabe.ok_or("keine uinput-Tastatur")?;
     let km = state.get_keymap();
@@ -443,6 +471,19 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
     let mut ablage: Box<dyn tippkraft::uinput::Zwischenablage> = match sitzung {
         tippkraft::uinput::Sitzung::Kde if !o.trocken => Box::new(tippkraft::ablage::KdeAblage::starten()?),
         tippkraft::uinput::Sitzung::X11 if !o.trocken => Box::new(tippkraft::x11::X11Ablage::starten()?),
+        // F10: Niri, Sway, Hyprland über ext-data-control, GNOME über die X11-Zwischenablage von Xwayland.
+        // Fehlt sie, tippen formatierte Bausteine den reinen Text (AC-13).
+        tippkraft::uinput::Sitzung::Wlroots | tippkraft::uinput::Sitzung::Gnome if !o.trocken => {
+            let a: Result<Box<dyn tippkraft::uinput::Zwischenablage>, String> = if sitzung == tippkraft::uinput::Sitzung::Gnome {
+                tippkraft::x11::X11Ablage::starten().map(|a| Box::new(a) as _)
+            } else {
+                tippkraft::ablage::KdeAblage::starten().map(|a| Box::new(a) as _)
+            };
+            a.unwrap_or_else(|e| {
+                eprintln!("tippkraft: {e}. Formatierte Bausteine werden als reiner Text getippt.");
+                Box::new(tippkraft::uinput::KeineAblage)
+            })
+        }
         _ => Box::new(tippkraft::uinput::KeineAblage),
     };
     let mut state = match wl.as_mut() {
@@ -697,11 +738,12 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 }
                 continue;
             }
-            Ereignis::PopupFertig { werte, loeschen, inhalt, gross, abbruch } => {
-                let (loeschen, aktionen) = match werte {
-                    Some(w) => (loeschen, nach_popup(&inhalt, &w, &engine.automatisch(&inhalt), gross)),
+            Ereignis::PopupFertig { werte, loeschen, inhalt, html, gross, abbruch } => {
+                let (loeschen, aktionen) = match (werte, html) {
+                    (Some(w), Some(h)) => (loeschen, tippkraft::engine::nach_popup_formatiert(&h, &inhalt, &w, &engine.automatisch(&inhalt), gross)),
+                    (Some(w), None) => (loeschen, nach_popup(&inhalt, &w, &engine.automatisch(&inhalt), gross)),
                     // Abbruch: nichts löschen, nur den zurückgehaltenen Auslöser nachholen
-                    None => (0, abbruch),
+                    (None, _) => (0, abbruch),
                 };
                 if o.trocken {
                     println!("ersetzen loeschen={loeschen} {aktionen:?}");
@@ -772,10 +814,10 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 let entscheidung = eingabe.map_or(Entscheidung::Durchlassen, |e| engine.eingabe(e));
                 match entscheidung {
                     Entscheidung::Durchlassen => weiter(1),
-                    Entscheidung::Popup { titel, loeschen, inhalt, gross, abbruch } => {
+                    Entscheidung::Popup { titel, loeschen, inhalt, html, gross, abbruch } => {
                         zurueckgehalten.insert(key);
                         let auto = engine.automatisch(&inhalt);
-                        popup_starten(tx.clone(), titel, loeschen, inhalt, gross, abbruch, auto);
+                        popup_starten(tx.clone(), titel, loeschen, inhalt, html, gross, abbruch, auto);
                     }
                     Entscheidung::Ersetzen { loeschen, aktionen } => {
                         zurueckgehalten.insert(key);

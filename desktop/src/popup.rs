@@ -72,7 +72,7 @@ impl Formular {
         aktionen(&einsetzen(inhalt, &self.werte(), auto))
             .into_iter()
             .map(|a| match a {
-                Aktion::Text(t) => t.replace(CURSOR, "▏"),
+                Aktion::Text(t) | Aktion::Html { text: t, .. } => t.replace(CURSOR, "▏"),
                 Aktion::Taste(t, n) => {
                     let s = match t {
                         Taste::Tab => "⇥",

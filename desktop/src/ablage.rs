@@ -38,7 +38,8 @@ struct Zustand {
 }
 
 enum Befehl {
-    Setzen(String, Sender<Result<(), String>>),
+    /// Text, optional HTML (F10)
+    Setzen(String, Option<String>, Sender<Result<(), String>>),
     Zurueck(Sender<()>),
 }
 
@@ -66,7 +67,12 @@ impl KdeAblage {
 impl Zwischenablage for KdeAblage {
     fn setzen(&mut self, text: &str) -> Result<(), String> {
         let (a, b) = channel();
-        self.tx.send(Befehl::Setzen(text.to_string(), a)).map_err(|_| "Zwischenablage beendet")?;
+        self.tx.send(Befehl::Setzen(text.to_string(), None, a)).map_err(|_| "Zwischenablage beendet")?;
+        b.recv_timeout(Duration::from_secs(2)).map_err(|_| "Zwischenablage antwortet nicht".to_string())?
+    }
+    fn setzen_html(&mut self, html: &str, text: &str) -> Result<(), String> {
+        let (a, b) = channel();
+        self.tx.send(Befehl::Setzen(text.to_string(), Some(html.to_string()), a)).map_err(|_| "Zwischenablage beendet")?;
         b.recv_timeout(Duration::from_secs(2)).map_err(|_| "Zwischenablage antwortet nicht".to_string())?
     }
     fn zuruecksetzen(&mut self) {
@@ -84,10 +90,14 @@ fn schleife(conn: Connection, mut queue: EventQueue<Zustand>, mut z: Zustand, mg
     loop {
         pumpen(&conn, &mut queue, &mut z, 20);
         match rx.try_recv() {
-            Ok(Befehl::Setzen(text, antwort)) => {
+            Ok(Befehl::Setzen(text, html, antwort)) => {
                 gesichert = z.aktuell.clone().map(|o| lesen(&conn, &mut queue, &mut z, &o)).unwrap_or_default();
                 gesichert_auswahl = z.auswahl.clone().map(|o| lesen(&conn, &mut queue, &mut z, &o)).unwrap_or_default();
                 let mut inhalt: Inhalt = TEXT.iter().map(|m| (m.to_string(), text.as_bytes().to_vec())).collect();
+                if let Some(h) = html {
+                    // F10: HTML zuerst anbieten, Programme nehmen das erste Format, das sie kennen
+                    inhalt.insert(0, ("text/html".into(), h.into_bytes()));
+                }
                 inhalt.push((GEHEIM.into(), b"secret".to_vec()));
                 anbieten(&mgr, &geraet, &qh, &mut z, inhalt.clone(), false);
                 anbieten(&mgr, &geraet, &qh, &mut z, inhalt, true);

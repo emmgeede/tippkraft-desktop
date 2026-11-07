@@ -15,7 +15,11 @@ pub enum Ausloeser {
 #[serde(rename_all = "camelCase")]
 pub struct Baustein {
     pub kuerzel: String,
+    /// Reiner Text. Beim formatierten Baustein (F10) aus dem HTML abgeleitet, für Programme ohne HTML
     pub inhalt: String,
+    /// F10: formatierter Baustein, bereinigtes HTML (nur im Tarif mit Formatierung)
+    #[serde(default)]
+    pub html: Option<String>,
     /// ab Version 2
     #[serde(default)]
     pub bezeichnung: Option<String>,
@@ -103,6 +107,8 @@ impl Taste {
 pub enum Aktion {
     Text(String),
     Taste(Taste, u8),
+    /// F10: über die Zwischenablage einfügen, als HTML und als reiner Text
+    Html { html: String, text: String },
 }
 
 /// Zerlegt einen Inhalt in Text und Tasten-Tokens. "[[[[" steht für ein wörtliches "[[".

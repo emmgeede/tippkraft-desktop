@@ -19,6 +19,8 @@ pub enum Fremd {
 pub enum Schritt {
     Taste { code: u16, umschalt: bool, altgr: bool },
     Einfuegen(String),
+    /// F10: formatierter Abschnitt
+    EinfuegenHtml { html: String, text: String },
     Unicode(char),
 }
 
@@ -108,6 +110,7 @@ pub fn plan(km: &xkb::Keymap, layout: u32, loeschen: usize, aktionen: &[Aktion],
     for a in aktionen {
         match a {
             Aktion::Taste(t, n) => out.extend(std::iter::repeat_n(taste(token_code(*t)), *n as usize)),
+            Aktion::Html { html, text } => out.push(Schritt::EinfuegenHtml { html: html.clone(), text: text.clone() }),
             Aktion::Text(text) => {
                 let teile: Vec<Option<Vec<Schritt>>> = text.chars().map(|c| zeichen(km, layout, c)).collect();
                 if fremd == Fremd::Einfuegen && teile.iter().any(Option::is_none) {
@@ -282,6 +285,19 @@ mod sitzung_tests {
 pub trait Zwischenablage {
     fn setzen(&mut self, text: &str) -> Result<(), String>;
     fn zuruecksetzen(&mut self);
+    /// F10: HTML und reiner Text. Ohne HTML-Unterstützung nur der Text.
+    fn setzen_html(&mut self, _html: &str, text: &str) -> Result<(), String> {
+        self.setzen(text)
+    }
+    /// Ohne Zwischenablage werden formatierte Bausteine getippt (F10 AC-13)
+    fn vorhanden(&self) -> bool {
+        true
+    }
+}
+
+/// F10 AC-13: ohne Zwischenablage den reinen Text tippen
+pub fn ohne_html(akt: &[Aktion]) -> Vec<Aktion> {
+    akt.iter().map(|a| if let Aktion::Html { text, .. } = a { Aktion::Text(text.clone()) } else { a.clone() }).collect()
 }
 
 /// Schritte als Tastenereignisse senden: `senden(code, 1 = drücken / 0 = loslassen)`
@@ -324,8 +340,12 @@ pub fn ausfuehren(
                 }
                 std::thread::sleep(IBUS_PAUSE);
             }
-            Schritt::Einfuegen(text) => {
-                ablage.setzen(text)?;
+            Schritt::Einfuegen(_) | Schritt::EinfuegenHtml { .. } => {
+                match s {
+                    Schritt::EinfuegenHtml { html, text } => ablage.setzen_html(html, text)?,
+                    Schritt::Einfuegen(text) => ablage.setzen(text)?,
+                    _ => unreachable!(),
+                }
                 drueck(EINFG, true, false, false, senden);
                 // Die App holt den Inhalt asynchron ab. ponytail: feste Wartezeit statt Abholung abzuwarten
                 std::thread::sleep(std::time::Duration::from_millis(150));
@@ -347,6 +367,10 @@ mod ausfuehren_tests {
     impl Zwischenablage for Attrappe {
         fn setzen(&mut self, text: &str) -> Result<(), String> {
             self.log.push(format!("setzen {text}"));
+            Ok(())
+        }
+        fn setzen_html(&mut self, html: &str, text: &str) -> Result<(), String> {
+            self.log.push(format!("html {html} | {text}"));
             Ok(())
         }
         fn zuruecksetzen(&mut self) {
@@ -381,6 +405,18 @@ mod ausfuehren_tests {
         assert_eq!(ev, [(42, 1), (110, 1), (110, 0), (42, 0)]);
         assert_eq!(log, ["setzen 🙂", "zurück"]);
     }
+
+    #[test]
+    fn html_abschnitt_wird_eingefuegt_tasten_dazwischen_gedrueckt_f10() {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let km = xkb::Keymap::new_from_names(&ctx, "evdev", "pc105", "us", "", None, xkb::KEYMAP_COMPILE_NO_FLAGS).unwrap();
+        let akt = [Aktion::Html { html: "<b>a</b>".into(), text: "a".into() }, Aktion::Taste(crate::format::Taste::Tab, 1), Aktion::Html { html: "b".into(), text: "b".into() }];
+        let schritte = plan(&km, 0, 0, &akt, Fremd::Unicode);
+        let (ev, log) = lauf(&schritte);
+        assert_eq!(ev, [(42, 1), (110, 1), (110, 0), (42, 0), (15, 1), (15, 0), (42, 1), (110, 1), (110, 0), (42, 0)]);
+        assert_eq!(log, ["html <b>a</b> | a", "zurück", "html b | b", "zurück"]);
+        assert_eq!(ohne_html(&akt)[0], Aktion::Text("a".into()));
+    }
 }
 
 /// F11 AC-5: aktives Layout bei jeder Ersetzung frisch lesen. Nicht lesbar = erstes Layout.
@@ -405,4 +441,7 @@ impl Zwischenablage for KeineAblage {
         Err("keine Zwischenablage".into())
     }
     fn zuruecksetzen(&mut self) {}
+    fn vorhanden(&self) -> bool {
+        false
+    }
 }

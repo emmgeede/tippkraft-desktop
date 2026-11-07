@@ -30,7 +30,7 @@ pub enum Entscheidung {
     /// Taste zurückhalten, `loeschen` Zeichen per Backspace entfernen, dann `aktionen` ausführen
     Ersetzen { loeschen: usize, aktionen: Vec<Aktion> },
     /// Taste zurückhalten und Popup öffnen. Danach `nach_popup` tippen oder bei Abbruch `abbruch`.
-    Popup { titel: String, loeschen: usize, inhalt: String, gross: bool, abbruch: Vec<Aktion> },
+    Popup { titel: String, loeschen: usize, inhalt: String, html: Option<String>, gross: bool, abbruch: Vec<Aktion> },
 }
 
 /// Getippte Zeichen. Debug zeigt bewusst nur die Länge (Prinzip 2).
@@ -204,11 +204,21 @@ impl Engine {
                 Ausloeser::Enter => vec![Aktion::Taste(Taste::Enter, 1)],
                 Ausloeser::Tab => vec![Aktion::Taste(Taste::Tab, 1)],
             };
-            return Entscheidung::Popup { titel: getippt, loeschen, inhalt: b.inhalt, gross, abbruch };
+            return Entscheidung::Popup { titel: getippt, loeschen, inhalt: b.inhalt, html: b.html, gross, abbruch };
         }
-        let akt = nach_popup(&b.inhalt, &Default::default(), &self.automatisch(&b.inhalt), gross);
-        let nur_text = akt.iter().all(|a| matches!(a, Aktion::Text(_)));
-        let eingefuegt = akt.iter().map(|a| if let Aktion::Text(t) = a { t.chars().count() } else { 0 }).sum();
+        let auto = self.automatisch(&b.inhalt);
+        let akt = match &b.html {
+            Some(h) => nach_popup_formatiert(h, &b.inhalt, &Default::default(), &auto, gross),
+            None => nach_popup(&b.inhalt, &Default::default(), &auto, gross),
+        };
+        let nur_text = akt.iter().all(|a| matches!(a, Aktion::Text(_) | Aktion::Html { .. }));
+        let eingefuegt = akt
+            .iter()
+            .map(|a| match a {
+                Aktion::Text(t) | Aktion::Html { text: t, .. } => t.chars().count(),
+                Aktion::Taste(..) => 0,
+            })
+            .sum();
         self.letzte = nur_text.then(|| Rueckgaengig { eingefuegt, wiederherstellen: format!("{getippt}{nachsatz}") });
         Entscheidung::Ersetzen { loeschen, aktionen: akt }
     }
@@ -224,6 +234,69 @@ pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String
         }
     }
     akt
+}
+
+/// F10: wie `nach_popup`, aber jeder Textabschnitt wird zu HTML + reinem Text. Werte, Datum und Zwischenablage
+/// landen maskiert im HTML. Passen die Abschnitte nicht zusammen (Sonderfall mit Cursor), wird der reine Text maskiert.
+pub fn nach_popup_formatiert(html: &str, inhalt: &str, werte: &std::collections::HashMap<String, String>, auto: &Automatisch, gross: bool) -> Vec<Aktion> {
+    let text = nach_popup(inhalt, werte, auto, gross);
+    let werte_h = werte.iter().map(|(k, v)| (k.clone(), maskieren(v))).collect();
+    let auto_h = Automatisch { datum: maskieren(&auto.datum), zwischenablage: auto.zwischenablage.as_deref().map(maskieren), ..auto.clone() };
+    let mut teile: Vec<String> = aktionen(&einsetzen(html, &werte_h, &auto_h))
+        .into_iter()
+        .filter_map(|a| if let Aktion::Text(t) = a { Some(t.replace(CURSOR, "")) } else { None })
+        .filter(|t| !t.is_empty())
+        .collect();
+    let texte = text.iter().filter(|a| matches!(a, Aktion::Text(_))).count();
+    if teile.len() != texte {
+        teile = text.iter().filter_map(|a| if let Aktion::Text(t) = a { Some(maskieren(t).replace('\n', "<br>")) } else { None }).collect();
+    } else if gross && let Some(erster) = teile.first_mut() {
+        *erster = gross_html(erster);
+    }
+    let mut teile = teile.into_iter();
+    text.into_iter()
+        .map(|a| match a {
+            Aktion::Text(t) => Aktion::Html { html: teile.next().unwrap_or_default(), text: t },
+            andere => andere,
+        })
+        .collect()
+}
+
+fn maskieren(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Ersten Buchstaben außerhalb von Tags und Entities großschreiben
+fn gross_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let (mut im_tag, mut in_entity, mut fertig) = (false, false, false);
+    for c in html.chars() {
+        match c {
+            _ if fertig => out.push(c),
+            '<' => {
+                im_tag = true;
+                out.push(c);
+            }
+            '>' if im_tag => {
+                im_tag = false;
+                out.push(c);
+            }
+            '&' if !im_tag => {
+                in_entity = true;
+                out.push(c);
+            }
+            ';' if in_entity => {
+                in_entity = false;
+                out.push(c);
+            }
+            _ if im_tag || in_entity || !c.is_alphabetic() => out.push(c),
+            _ => {
+                out.extend(c.to_uppercase());
+                fertig = true;
+            }
+        }
+    }
+    out
 }
 
 /// Heutiges Datum im Format der aktuellen Sprache (F15): DE TT.MM.JJJJ, EN JJJJ-MM-TT
@@ -286,6 +359,7 @@ mod tests {
         Baustein {
             kuerzel: kuerzel.into(),
             inhalt: inhalt.into(),
+            html: None,
             bezeichnung: None,
             aktiv: true,
             ausloeser,
@@ -476,7 +550,7 @@ mod tests {
     fn abfragen_oeffnen_das_popup_ac6_ac9() {
         let inhalt = "{{?Anrede:Herr|Frau}} {{?Name}}";
         let mut e = engine(vec![b("brief", inhalt, Ausloeser::Leertaste), b(";p", inhalt, Ausloeser::Sofort), b("pe", inhalt, Ausloeser::Enter)]);
-        let erwartet = |loeschen, gross, abbruch| Entscheidung::Popup { titel: "brief".into(), loeschen, inhalt: inhalt.into(), gross, abbruch };
+        let erwartet = |loeschen, gross, abbruch| Entscheidung::Popup { titel: "brief".into(), loeschen, inhalt: inhalt.into(), html: None, gross, abbruch };
         assert_eq!(tippe(&mut e, "brief ").last(), Some(&erwartet(5, false, vec![Aktion::Text(" ".into())])));
         assert!(matches!(tippe(&mut e, "Brief ").last(), Some(Entscheidung::Popup { titel, gross: true, .. }) if titel == "Brief"));
         assert!(matches!(tippe(&mut e, ";p").last(), Some(Entscheidung::Popup { loeschen: 1, abbruch, .. }) if *abbruch == vec![Aktion::Text("p".into())]));
@@ -550,5 +624,39 @@ mod tests {
         // hinter dem Cursor ein Tasten-Token (z. B. aus einem Verweis): Cursor wird ignoriert
         let akt = nach_popup("a{{=cursor}}b[[Tab]]", &Default::default(), &Default::default(), false);
         assert_eq!(akt, vec![Aktion::Text("ab".into()), Aktion::Taste(Taste::Tab, 1)]);
+    }
+
+    // ---------- F10: formatierte Bausteine ----------
+
+    fn fmt(kuerzel: &str, html: &str, inhalt: &str) -> Baustein {
+        Baustein { html: Some(html.into()), ..b(kuerzel, inhalt, Ausloeser::Leertaste) }
+    }
+
+    #[test]
+    fn formatierter_baustein_wird_eingefuegt_f10_ac10() {
+        let mut e = engine(vec![fmt("sig", "<p>Hallo <strong>Welt</strong></p>", "Hallo Welt")]);
+        assert_eq!(tippe(&mut e, "sig ").last(), Some(&Entscheidung::Ersetzen { loeschen: 3, aktionen: vec![Aktion::Html { html: "<p>Hallo <strong>Welt</strong></p>".into(), text: "Hallo Welt".into() }] }));
+        // Rückgängig gilt wie bei getippten Bausteinen, gezählt wird der reine Text (AC-14)
+        assert_eq!(e.eingabe(Eingabe::Backspace), Entscheidung::Ersetzen { loeschen: 10, aktionen: vec![Aktion::Text("sig ".into())] });
+    }
+
+    #[test]
+    fn werte_werden_im_html_maskiert_und_tasten_teilen_f10_ac11_ac12() {
+        let mut werte = std::collections::HashMap::new();
+        werte.insert("Name".to_string(), "A & <B>".to_string());
+        let akt = nach_popup_formatiert("<p>{{?Name}}</p>[[Tab]]<strong>x</strong>", "{{?Name}}\n[[Tab]]x", &werte, &Default::default(), false);
+        assert_eq!(akt, vec![Aktion::Html { html: "<p>A &amp; &lt;B&gt;</p>".into(), text: "A & <B>\n".into() }, Aktion::Taste(Taste::Tab, 1), Aktion::Html { html: "<strong>x</strong>".into(), text: "x".into() }]);
+    }
+
+    #[test]
+    fn grossschreibung_auch_im_html_f10() {
+        let akt = nach_popup_formatiert("<p><strong>mit</strong> Gruß &amp; mehr</p>", "mit Gruß & mehr", &Default::default(), &Default::default(), true);
+        assert_eq!(akt, vec![Aktion::Html { html: "<p><strong>Mit</strong> Gruß &amp; mehr</p>".into(), text: "Mit Gruß & mehr".into() }]);
+    }
+
+    #[test]
+    fn formatierter_baustein_mit_abfrage_geht_ins_popup_f10() {
+        let mut e = engine(vec![fmt("brief", "<p>Hallo {{?Name}}</p>", "Hallo {{?Name}}")]);
+        assert!(matches!(tippe(&mut e, "brief ").last(), Some(Entscheidung::Popup { html: Some(h), .. }) if h == "<p>Hallo {{?Name}}</p>"));
     }
 }

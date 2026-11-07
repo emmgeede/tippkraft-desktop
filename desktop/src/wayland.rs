@@ -147,6 +147,8 @@ pub fn tastenfolge(loeschen: usize, aktionen: &[Aktion]) -> Vec<(xkb::Keysym, bo
                 }
             }
             Aktion::Taste(t, n) => out.extend(std::iter::repeat_n((taste_symbol(*t), false), *n as usize)),
+            // F10: die Zwischenablage setzt `ausgeben` vorher, hier nur Umschalt+Einfg
+            Aktion::Html { .. } => out.push((xkb::Keysym::Insert, true)),
         }
     }
     out.retain(|(s, _)| s.raw() != 0); // NoSymbol: nicht darstellbar

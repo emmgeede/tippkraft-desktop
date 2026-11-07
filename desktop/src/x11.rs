@@ -102,29 +102,48 @@ type Inhalt = Vec<(Atom, Vec<u8>)>;
 const MAX_FORMAT: usize = 256 * 1024;
 
 enum Befehl {
-    Setzen(String, Sender<Result<(), String>>),
+    /// Text, optional HTML (F10)
+    Setzen(String, Option<String>, Sender<Result<(), String>>),
     Zurueck(Sender<()>),
 }
 
 /// F36: wie die KDE-Ablage. Ein Thread besitzt CLIPBOARD und PRIMARY und liefert aus, alter Inhalt wird gesichert und zurückgestellt.
 pub struct X11Ablage {
     tx: Sender<Befehl>,
+    /// GNOME: Xwayland dazwischen, Mutter überträgt die Auswahl erst nach einem Moment zu Wayland (F10)
+    bruecke: bool,
 }
+
+/// ponytail: feste Wartezeit (in der GNOME-VM gemessen), Mutter meldet die Übernahme nicht zurück
+const BRUECKE_PAUSE: Duration = Duration::from_millis(80);
 
 impl X11Ablage {
     pub fn starten() -> Result<Self, String> {
         let a = Ablage::neu().map_err(|e| format!("X11-Zwischenablage: {e}"))?;
         let (tx, rx) = channel();
         std::thread::spawn(move || a.schleife(rx));
-        Ok(X11Ablage { tx })
+        Ok(X11Ablage { tx, bruecke: std::env::var_os("WAYLAND_DISPLAY").is_some() })
     }
 }
 
 impl Zwischenablage for X11Ablage {
     fn setzen(&mut self, text: &str) -> Result<(), String> {
         let (a, b) = channel();
-        self.tx.send(Befehl::Setzen(text.to_string(), a)).map_err(|_| "Zwischenablage beendet")?;
-        b.recv_timeout(Duration::from_secs(3)).map_err(|_| "Zwischenablage antwortet nicht".to_string())?
+        self.tx.send(Befehl::Setzen(text.to_string(), None, a)).map_err(|_| "Zwischenablage beendet")?;
+        let r = b.recv_timeout(Duration::from_secs(3)).map_err(|_| "Zwischenablage antwortet nicht".to_string())?;
+        if self.bruecke {
+            std::thread::sleep(BRUECKE_PAUSE);
+        }
+        r
+    }
+    fn setzen_html(&mut self, html: &str, text: &str) -> Result<(), String> {
+        let (a, b) = channel();
+        self.tx.send(Befehl::Setzen(text.to_string(), Some(html.to_string()), a)).map_err(|_| "Zwischenablage beendet")?;
+        let r = b.recv_timeout(Duration::from_secs(3)).map_err(|_| "Zwischenablage antwortet nicht".to_string())?;
+        if self.bruecke {
+            std::thread::sleep(BRUECKE_PAUSE);
+        }
+        r
     }
     fn zuruecksetzen(&mut self) {
         let (a, b) = channel();
@@ -142,6 +161,7 @@ struct Ablage {
     targets: Atom,
     eigen: Atom,
     text: [Atom; 4],
+    html: Atom,
     /// was wir pro Auswahl gerade ausliefern
     liefern: HashMap<Atom, Inhalt>,
 }
@@ -155,8 +175,9 @@ impl Ablage {
         let text = [atom(&c, "UTF8_STRING")?, AtomEnum::STRING.into(), atom(&c, "text/plain;charset=utf-8")?, atom(&c, "text/plain")?];
         let targets = atom(&c, "TARGETS")?;
         let eigen = atom(&c, "TIPPKRAFT_ABLAGE")?;
+        let html = atom(&c, "text/html")?;
         c.flush()?;
-        Ok(Ablage { c, win, sel, targets, eigen, text, liefern: HashMap::new() })
+        Ok(Ablage { c, win, sel, targets, eigen, text, html, liefern: HashMap::new() })
     }
 
     fn schleife(mut self, rx: Receiver<Befehl>) {
@@ -164,10 +185,14 @@ impl Ablage {
         loop {
             self.pumpen(Duration::from_millis(10));
             match rx.try_recv() {
-                Ok(Befehl::Setzen(text, antwort)) => {
+                Ok(Befehl::Setzen(text, html, antwort)) => {
                     let sel = self.sel;
                     gesichert = sel.map(|s| self.lesen(s));
-                    let inhalt: Inhalt = self.text.iter().map(|t| (*t, text.as_bytes().to_vec())).collect();
+                    let mut inhalt: Inhalt = self.text.iter().map(|t| (*t, text.as_bytes().to_vec())).collect();
+                    if let Some(h) = html {
+                        // F10: HTML zuerst anbieten
+                        inhalt.insert(0, (self.html, h.into_bytes()));
+                    }
                     let r = sel.iter().try_for_each(|s| self.besitzen(*s, inhalt.clone())).map_err(|e| e.to_string());
                     let _ = antwort.send(r);
                 }

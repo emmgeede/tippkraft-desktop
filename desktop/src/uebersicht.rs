@@ -178,6 +178,7 @@ mod tests {
         Baustein {
             kuerzel: kuerzel.into(),
             inhalt: inhalt.into(),
+            html: None,
             bezeichnung: bezeichnung.map(String::from),
             aktiv,
             ausloeser: Ausloeser::Leertaste,
