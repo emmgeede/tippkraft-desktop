@@ -218,9 +218,15 @@ pub enum Sitzung {
     Wlroots,
     Gnome,
     Kde,
+    /// F36: X11-Sitzung (Cinnamon, Xfce, MATE, GNOME/KDE unter X11)
+    X11,
 }
 
 pub fn sitzung(env: impl Fn(&str) -> Option<String>) -> Sitzung {
+    // F36: ohne Wayland, aber mit DISPLAY ist es X11 (auch GNOME/KDE unter X11)
+    if env("WAYLAND_DISPLAY").is_none() && env("DISPLAY").is_some() {
+        return Sitzung::X11;
+    }
     if env("NIRI_SOCKET").is_some() || env("SWAYSOCK").is_some() || env("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         return Sitzung::Wlroots;
     }
@@ -257,6 +263,10 @@ mod sitzung_tests {
         assert_eq!(sitzung(env(&[("XDG_CURRENT_DESKTOP", "GNOME"), ("NIRI_SOCKET", "/x")])), Sitzung::Wlroots);
         assert_eq!(sitzung(env(&[("XDG_CURRENT_DESKTOP", "niri")])), Sitzung::Wlroots);
         assert_eq!(sitzung(env(&[])), Sitzung::Wlroots);
+        // F36
+        assert_eq!(sitzung(env(&[("DISPLAY", ":0"), ("XDG_CURRENT_DESKTOP", "X-Cinnamon")])), Sitzung::X11);
+        assert_eq!(sitzung(env(&[("DISPLAY", ":0"), ("XDG_CURRENT_DESKTOP", "GNOME")])), Sitzung::X11);
+        assert_eq!(sitzung(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0"), ("XDG_CURRENT_DESKTOP", "GNOME")])), Sitzung::Gnome);
     }
 
     #[test]
@@ -383,6 +393,7 @@ pub fn aktuelles_layout(s: Sitzung) -> u32 {
             };
             gnome_layout(&lesen("sources"), &lesen("mru-sources"))
         }
+        Sitzung::X11 => crate::x11::gruppe(),
         Sitzung::Wlroots => 0,
     }
 }

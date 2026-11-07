@@ -11,6 +11,8 @@ pub enum Quelle {
     Hyprland(std::path::PathBuf),
     /// F11: KWin-Skript über D-Bus
     Kde,
+    /// F36: _NET_ACTIVE_WINDOW unter X11
+    X11,
 }
 
 /// Niri hat Vorrang, danach Sway, dann Hyprland (AC-3)
@@ -24,7 +26,11 @@ pub fn erkennen(env: impl Fn(&str) -> Option<String>) -> Option<Quelle> {
     if let Some(sig) = env("HYPRLAND_INSTANCE_SIGNATURE") {
         return Some(Quelle::Hyprland(hyprland::verzeichnis(&sig, env("XDG_RUNTIME_DIR").as_deref())));
     }
-    (crate::uinput::sitzung(&env) == crate::uinput::Sitzung::Kde).then_some(Quelle::Kde)
+    match crate::uinput::sitzung(&env) {
+        crate::uinput::Sitzung::Kde => Some(Quelle::Kde),
+        crate::uinput::Sitzung::X11 => Some(Quelle::X11),
+        _ => None,
+    }
 }
 
 pub fn beobachten(q: &Quelle, melden: &mut dyn FnMut(Option<String>)) -> Result<(), String> {
@@ -33,6 +39,7 @@ pub fn beobachten(q: &Quelle, melden: &mut dyn FnMut(Option<String>)) -> Result<
         Quelle::Sway(p) => sway::beobachten(p, melden),
         Quelle::Hyprland(v) => hyprland::beobachten(v, melden),
         Quelle::Kde => kde::beobachten(melden),
+        Quelle::X11 => crate::x11::beobachten(melden),
     }
 }
 
@@ -64,6 +71,7 @@ pub fn tastenkuerzel(q: &Quelle, bin: &str, hypr_lua: bool) -> (&'static str, &'
         Quelle::Hyprland(_) if hypr_lua => ("Hyprland", "~/.config/hypr/hyprland.lua", format!("hl.bind(\"SUPER + ALT + T\", hl.dsp.exec_cmd(\"{bin} pause\"))\nhl.bind(\"SUPER + ALT + SPACE\", hl.dsp.exec_cmd(\"{bin} overview\"))")),
         Quelle::Hyprland(_) => ("Hyprland", "~/.config/hypr/hyprland.conf", format!("bind = SUPER ALT, T, exec, {bin} pause\nbind = SUPER ALT, SPACE, exec, {bin} overview")),
         Quelle::Kde => ("KDE Plasma", "", format!("Meta+Alt+T: {bin} pause\nMeta+Alt+Space: {bin} overview")),
+        Quelle::X11 => ("X11", "", format!("Super+Alt+T: {bin} pause\nSuper+Alt+Space: {bin} overview")),
     }
 }
 

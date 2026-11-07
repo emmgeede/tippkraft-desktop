@@ -14,3 +14,4 @@ pub mod tray;
 pub mod uebersicht;
 pub mod uinput;
 pub mod wayland;
+pub mod x11;

@@ -679,3 +679,36 @@ fn sprache_aus_dem_stand_f15_ac4_ac8() {
     let (code, out) = cli(&u, &["status"]);
     assert_eq!((code, out.trim()), (1, "tippkraft: tippkraft is not running"));
 }
+
+#[test]
+fn einrichten_unter_x11_nennt_tastenkuerzel_und_legt_autostart_an_f36_ac6() {
+    let home = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("home-einrichten-x11");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".config/tippkraft")).unwrap();
+    std::fs::write(home.join(".config/tippkraft/zugang.json"), r#"{"server":"http://localhost:4321","token":"tk_x"}"#).unwrap();
+    let fake = home.join("systemctl");
+    std::fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    for (desktop, weg) in [("XFCE", "Xfce: Einstellungen → Tastatur"), ("X-Cinnamon", "Cinnamon: Systemeinstellungen → Tastatur")] {
+        let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
+            .arg("einrichten")
+            .env("HOME", &home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("NIRI_SOCKET")
+            .env_remove("SWAYSOCK")
+            .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+            .env("DISPLAY", ":0")
+            .env("XDG_CURRENT_DESKTOP", desktop)
+            .env("TIPPKRAFT_SYSTEMCTL", &fake)
+            .env("TIPPKRAFT_SPRACHE", "de")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains(weg) && text.contains("Super+Alt+T:"), "{text}");
+    }
+    let auto = std::fs::read_to_string(home.join(".config/autostart/tippkraft.desktop")).unwrap();
+    assert!(auto.contains("Exec=systemctl --user start tippkraft.service"));
+}

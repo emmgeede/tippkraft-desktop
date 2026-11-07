@@ -209,6 +209,12 @@ fn einrichten() -> Result<(), String> {
     let starter_start = home.join(".local/share/applications/tippkraft-starten.desktop");
     std::fs::create_dir_all(starter_start.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&starter_start, "[Desktop Entry]\nType=Application\nName=Start tippkraft\nName[de]=tippkraft starten\nComment=Start the text expander\nComment[de]=Textexpander starten\nExec=systemctl --user start tippkraft.service\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n").map_err(|e| e.to_string())?;
+    // F36: Xfce und andere X11-Sitzungen starten graphical-session.target nicht, dort startet der Autostart den Dienst
+    if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::X11 {
+        let autostart = home.join(".config/autostart/tippkraft.desktop");
+        std::fs::create_dir_all(autostart.parent().unwrap()).map_err(|e| e.to_string())?;
+        std::fs::write(&autostart, "[Desktop Entry]\nType=Application\nName=tippkraft\nExec=systemctl --user start tippkraft.service\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n").map_err(|e| e.to_string())?;
+    }
     let starter = home.join(".local/share/applications/tippkraft-verbinden.desktop");
     std::fs::create_dir_all(starter.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} connect\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
@@ -216,7 +222,15 @@ fn einrichten() -> Result<(), String> {
     // F22 AC-5: Tastenkürzel für den laufenden Compositor zum Kopieren
     if let Some(q) = tippkraft::fokus::erkennen(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) {
         let (name, datei, zeilen) = tippkraft::fokus::tastenkuerzel(&q, &ziel.display().to_string(), home.join(".config/hypr/hyprland.lua").exists());
-        if q == tippkraft::fokus::Quelle::Kde {
+        if q == tippkraft::fokus::Quelle::X11 {
+            // F36 AC-6: eigene Tastenkürzel liegen je Desktop woanders
+            let de = i18n::aktuell() == Sprache::De;
+            let weg = match std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase() {
+                d if d.contains("XFCE") => if de { "Xfce: Einstellungen → Tastatur → Tastenkürzel für Anwendungen → Hinzufügen" } else { "Xfce: Settings → Keyboard → Application Shortcuts → Add" },
+                _ => if de { "Cinnamon: Systemeinstellungen → Tastatur → Tastenkombinationen → Benutzerdefinierte Tastenkombination hinzufügen" } else { "Cinnamon: System Settings → Keyboard → Shortcuts → Add custom shortcut" },
+            };
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
+        } else if q == tippkraft::fokus::Quelle::Kde {
             // F11 AC-10: KDE hat keine Konfigurationsdatei dafür, also der Weg in den Systemeinstellungen
             let weg = if i18n::aktuell() == Sprache::De { "Systemeinstellungen → Tastatur → Kurzbefehle → Neu → Befehl oder Skript" } else { "System Settings → Keyboard → Shortcuts → Add New → Command or Script" };
             println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
@@ -346,7 +360,7 @@ fn xkb_state(keymap: &str) -> Result<xkb::State, String> {
 /// Ersetzung ausgeben: Niri/Sway/Hyprland über virtual-keyboard, GNOME/KDE über uinput (F11)
 #[allow(clippy::too_many_arguments)]
 fn ausgeben(
-    wl: &mut wayland::Wayland,
+    wl: Option<&mut wayland::Wayland>,
     sitzung: tippkraft::uinput::Sitzung,
     state: &xkb::State,
     weitergabe: Option<&mut VirtualDevice>,
@@ -357,13 +371,13 @@ fn ausgeben(
     lebt: &dyn Fn(),
 ) -> Result<(), String> {
     use tippkraft::uinput::{Fremd, Sitzung, aktuelles_layout, ausfuehren, plan};
-    if sitzung == Sitzung::Wlroots {
+    if let Some(wl) = wl.filter(|_| sitzung == Sitzung::Wlroots) {
         return wl.tippen(loeschen, aktionen, verzoegerung, lebt);
     }
     let dev = weitergabe.ok_or("keine uinput-Tastatur")?;
     let km = state.get_keymap();
     let layout = aktuelles_layout(sitzung);
-    let schritte = plan(&km, layout, loeschen, aktionen, if sitzung == Sitzung::Kde { Fremd::Einfuegen } else { Fremd::Unicode });
+    let schritte = plan(&km, layout, loeschen, aktionen, if matches!(sitzung, Sitzung::Kde | Sitzung::X11) { Fremd::Einfuegen } else { Fremd::Unicode });
     ausfuehren(&schritte, &km, layout, &mut |code, wert| drop(dev.emit(&[InputEvent::new(EventType::KEY.0, code, wert)])), ablage, verzoegerung, lebt)
 }
 
@@ -412,13 +426,21 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
 
     // F11: GNOME/KDE haben kein virtual-keyboard, dort tippt tippkraft über die uinput-Tastatur
     let sitzung = tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
-    let mut wl = wayland::Wayland::verbinden(!o.trocken && sitzung == tippkraft::uinput::Sitzung::Wlroots)?;
+    // F36: unter X11 gibt es keine Wayland-Verbindung, Keymap kommt aus X11
+    let x11 = sitzung == tippkraft::uinput::Sitzung::X11;
+    let mut wl = if x11 { None } else { Some(wayland::Wayland::verbinden(!o.trocken && sitzung == tippkraft::uinput::Sitzung::Wlroots)?) };
     let mut ablage: Box<dyn tippkraft::uinput::Zwischenablage> = match sitzung {
         tippkraft::uinput::Sitzung::Kde if !o.trocken => Box::new(tippkraft::ablage::KdeAblage::starten()?),
+        tippkraft::uinput::Sitzung::X11 if !o.trocken => Box::new(tippkraft::x11::X11Ablage::starten()?),
         _ => Box::new(tippkraft::uinput::KeineAblage),
     };
-    let mut state = xkb_state(wl.zustand.keymap.as_deref().unwrap_or_default())?;
-    wl.zustand.neu = false;
+    let mut state = match wl.as_mut() {
+        Some(wl) => {
+            wl.zustand.neu = false;
+            xkb_state(wl.zustand.keymap.as_deref().unwrap_or_default())?
+        }
+        None => xkb_state(&tippkraft::x11::keymap()?)?,
+    };
 
     let start = stand_laden(&pfade.stand);
     i18n::setzen(Sprache::fuer(start.sprache.as_deref()));
@@ -512,11 +534,13 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
 
     loop {
         herzschlag.store(jetzt_ms(), Ordering::Relaxed);
-        wl.pumpen();
-        if wl.zustand.neu {
-            wl.zustand.neu = false;
-            if let Some(km) = &wl.zustand.keymap {
-                state = xkb_state(km)?;
+        if let Some(wl) = wl.as_mut() {
+            wl.pumpen();
+            if wl.zustand.neu {
+                wl.zustand.neu = false;
+                if let Some(km) = &wl.zustand.keymap {
+                    state = xkb_state(km)?;
+                }
             }
         }
         // Fortsetzen erst, wenn keine Taste mehr gedrückt ist (sonst bleiben z. B. Mod+Alt hängen)
@@ -671,7 +695,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 } else {
                     // Fokus muss erst ins ursprüngliche Fenster zurück. ponytail: feste Wartezeit statt Fokus-Ereignis abwarten
                     std::thread::sleep(Duration::from_millis(200));
-                    if let Err(e) = ausgeben(&mut wl, sitzung, &state, weitergabe.as_mut(), ablage.as_mut(), loeschen, &aktionen, o.verzoegerung, &|| herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
+                    if let Err(e) = ausgeben(wl.as_mut(), sitzung, &state, weitergabe.as_mut(), ablage.as_mut(), loeschen, &aktionen, o.verzoegerung, &|| herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
                         eprintln!("tippkraft: Ausgabe fehlgeschlagen: {e}");
                     }
                 }
@@ -747,7 +771,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                         } else {
                             // kurz warten, damit bereits weitergegebene Tasten vor der Ausgabe ankommen
                             std::thread::sleep(Duration::from_millis(15));
-                            if let Err(e) = ausgeben(&mut wl, sitzung, &state, weitergabe.as_mut(), ablage.as_mut(), loeschen, &aktionen, o.verzoegerung, &|| herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
+                            if let Err(e) = ausgeben(wl.as_mut(), sitzung, &state, weitergabe.as_mut(), ablage.as_mut(), loeschen, &aktionen, o.verzoegerung, &|| herzschlag.store(jetzt_ms(), Ordering::Relaxed)) {
                                 eprintln!("tippkraft: Ausgabe fehlgeschlagen: {e}");
                             }
                         }

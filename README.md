@@ -1,12 +1,12 @@
 # tippkraft desktop
 
-The desktop client of [tippkraft](https://tippkraft.com), a text expander for Linux on Wayland: type an abbreviation and tippkraft types the snippet, in every app, with your keyboard layout, umlauts and emoji. You manage your snippets in the web app, the desktop client keeps a local copy and works offline.
+The desktop client of [tippkraft](https://tippkraft.com), a text expander for Linux on Wayland and X11: type an abbreviation and tippkraft types the snippet, in every app, with your keyboard layout, umlauts and emoji. You manage your snippets in the web app, the desktop client keeps a local copy and works offline.
 
 This repository is open source (MIT) so you can check what a program that reads your keyboard actually does. The web app and server are not part of it.
 
 ## Install
 
-Requirements: Linux x86_64, a Wayland session (GNOME 46+, KDE Plasma 6, Niri, Sway or Hyprland), your user in the `input` group (`sudo usermod -aG input "$USER"`, then log out and back in), and write access to `/dev/uinput` for that group (the installer prints the udev rule if it is missing).
+Requirements: Linux x86_64, a Wayland session (GNOME 46+, KDE Plasma 6, Niri, Sway or Hyprland) or an X11 session (Linux Mint Cinnamon, Xfce, MATE and others), your user in the `input` group (`sudo usermod -aG input "$USER"`, then log out and back in), and write access to `/dev/uinput` for that group (the installer prints the udev rule if it is missing).
 
 ```sh
 curl -fsSL https://tippkraft.com/install.sh | sh
