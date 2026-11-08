@@ -31,7 +31,7 @@ enum Ereignis {
     Steuerung(String, Sender<String>),
     /// Popup geschlossen: Werte oder `None` bei Abbruch (F8)
     Tray(tippkraft::tray::TrayAktion),
-    PopupFertig { werte: Option<std::collections::HashMap<String, String>>, loeschen: usize, inhalt: String, html: Option<String>, gross: bool, abbruch: Vec<Aktion> },
+    PopupFertig { werte: Option<std::collections::HashMap<String, String>>, loeschen: usize, inhalt: String, html: Option<String>, gross: bool, abbruch: Vec<Aktion>, auto: tippkraft::format::Automatisch },
 }
 
 fn main() {
@@ -100,7 +100,7 @@ fn popup() -> Result<(), String> {
 fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: String, html: Option<String>, gross: bool, abbruch: Vec<Aktion>, auto: tippkraft::format::Automatisch) {
     std::thread::spawn(move || {
         let programm = std::env::var_os("TIPPKRAFT_POPUP").map(PathBuf::from).or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| "tippkraft".into());
-        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), datum: auto.datum, zwischenablage: auto.zwischenablage, jetzt: auto.jetzt, de: auto.de }).unwrap();
+        let anfrage = serde_json::to_string(&tippkraft::popup::Anfrage { titel, inhalt: inhalt.clone(), auto: auto.clone() }).unwrap();
         let werte = (|| {
             let mut kind = std::process::Command::new(&programm).arg("popup").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().ok()?;
             std::io::Write::write_all(&mut kind.stdin.take()?, anfrage.as_bytes()).ok()?;
@@ -110,7 +110,7 @@ fn popup_starten(tx: Sender<Ereignis>, titel: String, loeschen: usize, inhalt: S
             }
             serde_json::from_slice::<tippkraft::popup::Antwort>(&out.stdout).ok().map(|a| a.werte)
         })();
-        let _ = tx.send(Ereignis::PopupFertig { werte, loeschen, inhalt, html, gross, abbruch });
+        let _ = tx.send(Ereignis::PopupFertig { werte, loeschen, inhalt, html, gross, abbruch, auto });
     });
 }
 
@@ -800,10 +800,14 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 }
                 continue;
             }
-            Ereignis::PopupFertig { werte, loeschen, inhalt, html, gross, abbruch } => {
+            Ereignis::PopupFertig { werte, loeschen, inhalt, html, gross, abbruch, auto } => {
+                // F42: dieselben automatischen Werte wie in der Vorschau (Zufall, Zwischenablage), Variablen merken
+                if let Some(w) = &werte {
+                    engine.merken(tippkraft::format::auswerten(&inhalt, w, &auto).variablen);
+                }
                 let (loeschen, aktionen) = match (werte, html) {
-                    (Some(w), Some(h)) => (loeschen, tippkraft::engine::nach_popup_formatiert(&h, &inhalt, &w, &engine.automatisch(&inhalt), gross)),
-                    (Some(w), None) => (loeschen, nach_popup(&inhalt, &w, &engine.automatisch(&inhalt), gross)),
+                    (Some(w), Some(h)) => (loeschen, tippkraft::engine::nach_popup_formatiert(&h, &inhalt, &w, &auto, gross)),
+                    (Some(w), None) => (loeschen, nach_popup(&inhalt, &w, &auto, gross)),
                     // Abbruch: nichts löschen, nur den zurückgehaltenen Auslöser nachholen
                     (None, _) => (0, abbruch),
                 };
