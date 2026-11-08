@@ -44,7 +44,7 @@ pub fn aktuell() -> Sprache {
     if AKTUELL.load(Ordering::Relaxed) == Sprache::De as u8 { Sprache::De } else { Sprache::En }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum T {
     Hilfe,
     LaeuftNicht,
@@ -104,6 +104,9 @@ pub enum T {
     PopupAbbrechen,
     PopupTasten,
     PopupNichts,
+    PopupPflicht,
+    PopupZahl,
+    PopupEmail,
     UebTitel,
     UebAnzahl,
     UebVonN,
@@ -210,6 +213,9 @@ Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
         PopupAbbrechen => ("Cancel", "Abbrechen"),
         PopupTasten => ("Enter · Tab · Arrows · Esc", "Enter · Tab · Pfeile · Esc"),
         PopupNichts => ("(nothing)", "(nichts)"),
+        PopupPflicht => ("Required", "Pflichtfeld"),
+        PopupZahl => ("Please enter a number", "Bitte eine Zahl"),
+        PopupEmail => ("Please enter an email address", "Bitte eine E-Mail-Adresse"),
         UebTitel => ("Snippets", "Bausteine"),
         UebAnzahl => ("{0} snippets", "{0} Bausteine"),
         UebVonN => ("{0} of {1}", "{0} von {1}"),

@@ -8,21 +8,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::POPUP_APP_ID;
 use crate::i18n::{T, tr};
-use crate::format::{Abfrage, Aktion, Automatisch, CURSOR, Taste, abfragen, aktionen, einsetzen};
+use crate::format::{Abfrage, Aktion, Automatisch, CURSOR, Taste, abfragen, aktionen, auswerten, einsetzen, gueltig};
 
 #[derive(Serialize, Deserialize)]
 pub struct Anfrage {
     pub titel: String,
     pub inhalt: String,
-    pub datum: String,
-    /// nur bei {{=clipboard}} (F9)
-    #[serde(default)]
-    pub zwischenablage: Option<String>,
-    /// F40: Zeitpunkt und Sprache für {{=date:FORMAT}}
-    #[serde(default)]
-    pub jetzt: String,
-    #[serde(default)]
-    pub de: bool,
+    /// Datum, Zeitpunkt, Sprache, Zwischenablage, Variablen (F42), Zufall (F42). Gleiche Felder wie früher, deshalb flach.
+    #[serde(flatten)]
+    pub auto: Automatisch,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -41,14 +35,28 @@ pub struct Formular {
 }
 
 impl Formular {
-    pub fn neu(inhalt: &str) -> Self {
+    /// F42 AC-4: mit vorhandenen Variablen vorbelegt
+    pub fn neu(inhalt: &str, auto: &Automatisch) -> Self {
         let a = abfragen(inhalt);
-        Formular { texte: vec![String::new(); a.len()], wahl: vec![0; a.len()], abfragen: a, aktiv: 0 }
+        let alt = |x: &Abfrage| auto.variablen.get(&x.name);
+        let texte = a.iter().map(|x| alt(x).cloned().unwrap_or_default()).collect();
+        let wahl = a.iter().map(|x| x.optionen.as_ref().and_then(|o| o.iter().position(|o| Some(o) == alt(x))).unwrap_or(0)).collect();
+        Formular { texte, wahl, abfragen: a, aktiv: 0 }
     }
 
-    pub fn weiter(&mut self, rueckwaerts: bool) {
-        let n = self.abfragen.len().max(1);
-        self.aktiv = if rueckwaerts { (self.aktiv + n - 1) % n } else { (self.aktiv + 1) % n };
+    /// F42 AC-7: Indizes der Felder in gewählten Zweigen
+    pub fn sichtbar(&self, inhalt: &str, auto: &Automatisch) -> Vec<usize> {
+        let namen = auswerten(inhalt, &self.werte(), auto).sichtbar;
+        (0..self.abfragen.len()).filter(|&i| namen.contains(&self.abfragen[i].name)).collect()
+    }
+
+    pub fn weiter(&mut self, rueckwaerts: bool, sichtbar: &[usize]) {
+        let n = sichtbar.len();
+        if n == 0 {
+            return;
+        }
+        let pos = sichtbar.iter().position(|&i| i == self.aktiv).unwrap_or(0);
+        self.aktiv = sichtbar[if rueckwaerts { (pos + n - 1) % n } else { (pos + 1) % n }];
     }
 
     /// Pfeiltaste im aktiven Auswahlfeld
@@ -65,6 +73,16 @@ impl Formular {
             .enumerate()
             .map(|(i, a)| (a.name.clone(), a.optionen.as_ref().map_or_else(|| self.texte[i].clone(), |o| o[self.wahl[i]].clone())))
             .collect()
+    }
+
+    /// F42 AC-14 bis AC-16: erstes sichtbares Feld mit Pflicht- oder Prüffehler
+    pub fn fehler(&self, sichtbar: &[usize]) -> Option<(usize, T)> {
+        let w = self.werte();
+        sichtbar.iter().copied().find_map(|i| {
+            let a = &self.abfragen[i];
+            let wert = &w[&a.name];
+            (!gueltig(a, wert)).then(|| (i, if wert.trim().is_empty() { T::PopupPflicht } else if a.pruefung.as_deref() == Some("email") { T::PopupEmail } else { T::PopupZahl }))
+        })
     }
 
     /// Fertiger Text, Tasten-Tokens als Symbole, Cursorposition als ▏
@@ -92,6 +110,8 @@ struct App {
     f: Formular,
     ergebnis: Arc<Mutex<Option<HashMap<String, String>>>>,
     fokus_gesetzt: Option<usize>,
+    /// F42: Feld mit Pflicht- oder Prüffehler nach Enter
+    fehler: Option<(usize, T)>,
 }
 
 /// Farben wie im Webtool (web/src/layouts/Layout.astro), hell und dunkel
@@ -185,9 +205,10 @@ impl eframe::App for App {
                 i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::ArrowDown),
             )
         });
+        let sichtbar = self.f.sichtbar(&self.anfrage.inhalt, &self.anfrage.auto);
         let ist_auswahl = self.f.abfragen.get(self.f.aktiv).is_some_and(|a| a.optionen.is_some());
         if tab || shift_tab {
-            self.f.weiter(shift_tab);
+            self.f.weiter(shift_tab, &sichtbar);
         }
         if ist_auswahl && (links || rechts) {
             self.f.waehlen(if links { -1 } else { 1 });
@@ -204,9 +225,11 @@ impl eframe::App for App {
             });
             ui.add_space(10.0);
 
-            for i in 0..self.f.abfragen.len() {
+            for &i in &sichtbar {
                 let aktiv = i == self.f.aktiv;
-                ui.label(RichText::new(&self.f.abfragen[i].name).color(if aktiv { f.accent } else { f.fg }));
+                let a = &self.f.abfragen[i];
+                let name = if a.pflicht { format!("{} *", a.name) } else { a.name.clone() };
+                ui.label(RichText::new(name).color(if aktiv { f.accent } else { f.fg }));
                 match self.f.abfragen[i].optionen.clone() {
                     None => {
                         let r = ui.add(egui::TextEdit::singleline(&mut self.f.texte[i]).desired_width(f32::INFINITY).margin(egui::vec2(10.0, 8.0)));
@@ -241,6 +264,11 @@ impl eframe::App for App {
                         });
                     }
                 }
+                if let Some((j, t)) = self.fehler
+                    && j == i
+                {
+                    ui.label(RichText::new(tr(t)).color(egui::Color32::from_rgb(0xdc, 0x26, 0x26)).size(13.0));
+                }
                 ui.add_space(6.0);
             }
 
@@ -248,7 +276,7 @@ impl eframe::App for App {
             ui.label(RichText::new(tr(T::PopupVorschau)).color(f.muted).size(13.0));
             egui::Frame::new().fill(f.flaeche).corner_radius(6).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &Automatisch { datum: self.anfrage.datum.clone(), zwischenablage: self.anfrage.zwischenablage.clone(), jetzt: self.anfrage.jetzt.clone(), de: self.anfrage.de })).monospace());
+                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &self.anfrage.auto)).monospace());
             });
             ui.add_space(14.0);
             ui.horizontal(|ui| {
@@ -265,7 +293,12 @@ impl eframe::App for App {
             });
         });
 
-        if einfuegen {
+        if einfuegen && let Some(fehler) = self.f.fehler(&sichtbar) {
+            // F42: Popup bleibt offen, Fokus aufs Feld mit dem Fehler
+            self.fehler = Some(fehler);
+            self.f.aktiv = fehler.0;
+            self.fokus_gesetzt = None;
+        } else if einfuegen {
             *self.ergebnis.lock().unwrap() = Some(self.f.werte());
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         } else if abbrechen {
@@ -276,10 +309,10 @@ impl eframe::App for App {
 
 /// Zeigt das Popup und liefert die Werte, `None` bei Abbruch
 pub fn zeigen(anfrage: Anfrage) -> Result<Option<HashMap<String, String>>, String> {
-    let f = Formular::neu(&anfrage.inhalt);
+    let f = Formular::neu(&anfrage.inhalt, &anfrage.auto);
     let hoehe = 236.0 + 72.0 * f.abfragen.len() as f32 + 18.0 * anfrage.inhalt.lines().count().saturating_sub(1) as f32;
     let ergebnis = Arc::new(Mutex::new(None));
-    let app = App { anfrage, f, ergebnis: ergebnis.clone(), fokus_gesetzt: None };
+    let app = App { anfrage, f, ergebnis: ergebnis.clone(), fokus_gesetzt: None, fehler: None };
     let optionen = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_app_id(POPUP_APP_ID).with_title("tippkraft").with_inner_size([520.0, hoehe]),
         ..Default::default()
@@ -304,22 +337,46 @@ mod tests {
     #[test]
     fn formular_tab_auswahl_werte_vorschau_ac11_ac12() {
         let inhalt = "{{?Anrede:Herr|Frau|}} {{?Name}}, {{=datum}}[[Tab]] {{?Name}}";
-        let mut f = Formular::neu(inhalt);
+        let mut f = Formular::neu(inhalt, &Automatisch::default());
+        let alle = [0, 1];
         assert_eq!(f.abfragen.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Anrede", "Name"]);
         assert_eq!(f.werte()["Anrede"], "Herr", "erste Option vorgewählt");
         f.waehlen(1);
         f.waehlen(1);
         assert_eq!(f.werte()["Anrede"], "", "leere Option");
         f.waehlen(-1);
-        f.weiter(false);
+        f.weiter(false, &alle);
         f.waehlen(1); // im Textfeld wirkungslos
         f.texte[1] = "Muster".into();
         assert_eq!(f.werte()["Anrede"], "Frau");
         assert_eq!(f.vorschau(inhalt, &Automatisch { datum: "04.11.2026".into(), zwischenablage: None, ..Default::default() }), "Frau Muster, 04.11.2026⇥ Muster");
         assert_eq!(f.vorschau("a{{=cursor}}b {{=clipboard}}", &Automatisch { datum: String::new(), zwischenablage: Some("Z".into()), ..Default::default() }), "a▏b Z");
-        f.weiter(false);
+        f.weiter(false, &alle);
         assert_eq!(f.aktiv, 0, "Tab springt vom letzten zum ersten Feld");
-        f.weiter(true);
+        f.weiter(true, &alle);
         assert_eq!(f.aktiv, 1);
+    }
+
+    #[test]
+    fn felder_ausblenden_vorbelegen_pruefen_f42_ac4_ac7_ac14_ac16() {
+        let inhalt = "{{?Firma}}{{#if Firma}} z. Hd. {{?Ansprechpartner*}}{{#end}} {{?Betrag:number}} {{?Anrede:Herr|Frau}}";
+        let mut auto = Automatisch::default();
+        auto.variablen.insert("Anrede".into(), "Frau".into());
+        auto.variablen.insert("Betrag".into(), "12".into());
+        let mut f = Formular::neu(inhalt, &auto);
+        assert_eq!((f.texte[2].as_str(), f.werte()["Anrede"].as_str()), ("12", "Frau"), "vorbelegt");
+        assert_eq!(f.sichtbar(inhalt, &auto), [0, 2, 3], "Ansprechpartner ausgeblendet");
+        assert_eq!(f.fehler(&f.sichtbar(inhalt, &auto)), None, "ausgeblendetes Pflichtfeld zählt nicht");
+        f.weiter(false, &f.sichtbar(inhalt, &auto));
+        assert_eq!(f.aktiv, 2, "Tab überspringt ausgeblendete Felder");
+        f.texte[0] = "ACME".into();
+        let s = f.sichtbar(inhalt, &auto);
+        assert_eq!(s, [0, 1, 2, 3]);
+        assert_eq!(f.fehler(&s), Some((1, T::PopupPflicht)));
+        f.texte[1] = "Udo".into();
+        f.texte[2] = "12a".into();
+        assert_eq!(f.fehler(&s), Some((2, T::PopupZahl)));
+        f.texte[2] = "12,5".into();
+        assert_eq!(f.fehler(&s), None);
     }
 }

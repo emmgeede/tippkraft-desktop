@@ -36,4 +36,17 @@ Der Desktop füllt sie beim Auslösen aus, der Server prüft nur die Syntax:
 - `{{?Name}}`: Textfeld im Popup. `{{?Name:a|b|…}}`: Auswahl (2 bis 20 Optionen, leere Option erlaubt). Gleicher Name wird einmal abgefragt.
 - `{{=date}}` (oder `{{=datum}}`): heutiges Datum ohne Popup, bei `sprache: de` als `TT.MM.JJJJ`, sonst ISO `JJJJ-MM-TT`.
 - `{{{{` steht für ein wörtliches `{{`. Der Server gibt es unverändert weiter, auch aus eingebundenen Bausteinen.
+- `{{=date:FORMAT}}` (F40): Format mit `d`, `dd`, `M` … `MMMM`, `yy`, `yyyy`, `EEE`, `EEEE`, `HH`, `mm`, ab F42 auch `w`/`ww` (ISO-Kalenderwoche) und `D`/`DDD` (Tag des Jahres). Text in `'…'` bleibt wörtlich.
+- `{{=clipboard}}`, `{{=cursor}}` (F9): Zwischenablage, Cursorposition.
+
+## Erweiterte Makros (F42)
+
+Formatversion bleibt 2. Ältere Desktops tippen diese Makros als Text.
+
+- `{{=date+14}}`, `{{=date-1m:FORMAT}}`: Datum verschoben, Einheit `d` (Standard), `w`, `m`, `y`, höchstens 4 Ziffern.
+- `{{=random:a|b|c}}`: zufällig eine Option, ohne Popup.
+- `{{?Name*}}`: Pflichtfeld. `{{?Name:number}}`, `{{?Name:email}}`: Prüfung im Popup.
+- `{{$Name}}`: Variable einsetzen, `{{$Name=Text}}`: setzen (fügt nichts ein). Jede Abfrage ist zugleich Variable. Variablen leben nur im Speicher der Desktop-App.
+- `{{#if Name}}`, `{{#if Name=Wert}}`, `{{#if Name!=Wert}}` … `{{#else}}` … `{{#end}}`: Bedingung, bis 5 Ebenen. Vergleich ohne Groß/klein und Leerzeichen am Rand. Abfragen in nicht gewählten Zweigen zeigt das Popup nicht. Der Server garantiert, dass Blöcke geschlossen sind.
+
 - Reihenfolge auf dem Desktop: Platzhalter und `{{{{` ersetzen (eingegebene Werte mit `[[` werden zu `[[[[` maskiert), danach Tasten-Tokens auswerten.

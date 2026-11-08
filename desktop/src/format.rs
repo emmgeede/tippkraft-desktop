@@ -154,10 +154,45 @@ pub fn aktionen(inhalt: &str) -> Vec<Aktion> {
 }
 
 /// Abfrage im Popup: Textfeld (`optionen: None`) oder Auswahl
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Abfrage {
     pub name: String,
     pub optionen: Option<Vec<String>>,
+    /// F42: {{?Name*}}
+    #[serde(default)]
+    pub pflicht: bool,
+    /// F42: "number" oder "email" bei {{?Name:number}}
+    #[serde(default)]
+    pub pruefung: Option<String>,
+}
+
+/// F42: "Name*:email" → Name, Pflicht, Rest hinter dem Doppelpunkt
+fn feld(rest: &str) -> (&str, bool, Option<&str>) {
+    let (roh, nach) = match rest.split_once(':') {
+        Some((n, o)) => (n, Some(o)),
+        None => (rest, None),
+    };
+    match roh.strip_suffix('*') {
+        Some(n) => (n, true, nach),
+        None => (roh, false, nach),
+    }
+}
+
+/// F42: Pflicht und Prüfung. Leere optionale Felder sind immer gültig.
+pub fn gueltig(a: &Abfrage, wert: &str) -> bool {
+    let w = wert.trim();
+    if w.is_empty() {
+        return !a.pflicht;
+    }
+    match a.pruefung.as_deref() {
+        Some("number") => {
+            let z = w.strip_prefix('-').unwrap_or(w);
+            let (ganz, rest) = z.split_once([',', '.']).unwrap_or((z, "0"));
+            [ganz, rest].iter().all(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+        }
+        Some("email") => w.split_once('@').is_some_and(|(l, d)| !l.is_empty() && !w.contains(char::is_whitespace) && !d.contains('@') && d.split('.').count() > 1 && d.split('.').all(|t| !t.is_empty())),
+        _ => true,
+    }
 }
 
 enum Stueck<'a> {
@@ -194,12 +229,11 @@ pub fn abfragen(inhalt: &str) -> Vec<Abfrage> {
         if let Stueck::Klammer(k) = s
             && let Some(rest) = k.strip_prefix('?')
         {
-            let (name, optionen) = match rest.split_once(':') {
-                Some((n, o)) => (n, Some(o.split('|').map(String::from).collect())),
-                None => (rest, None),
-            };
+            let (name, pflicht, nach) = feld(rest);
+            let pruefung = nach.filter(|o| matches!(*o, "number" | "email")).map(String::from);
+            let optionen = nach.filter(|_| pruefung.is_none()).map(|o| o.split('|').map(String::from).collect());
             if !out.iter().any(|a| a.name == name) {
-                out.push(Abfrage { name: name.into(), optionen });
+                out.push(Abfrage { name: name.into(), optionen, pflicht, pruefung });
             }
         }
     }
@@ -217,6 +251,12 @@ pub struct Automatisch {
     pub de: bool,
     /// nur gelesen, wenn der Inhalt {{=clipboard}} enthält
     pub zwischenablage: Option<String>,
+    /// F42: Variablen aus früheren Bausteinen, nur im Speicher
+    #[serde(default)]
+    pub variablen: std::collections::HashMap<String, String>,
+    /// F42: Startwert für {{=random:…}}, damit HTML und Text dieselbe Option bekommen
+    #[serde(default)]
+    pub zufall: u64,
 }
 
 const MONATE_DE: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
@@ -231,8 +271,11 @@ pub fn datum_mit_format(t: chrono::NaiveDateTime, fmt: &str, de: bool) -> String
     let tag = (if de { TAGE_DE } else { TAGE_EN })[t.weekday().num_days_from_monday() as usize];
     let kurz = |s: &str, n: usize| s.chars().take(n).collect::<String>();
     // längste Muster zuerst
-    let muster: [(&str, String); 12] = [
+    let muster: [(&str, String); 16] = [
         ("yyyy", format!("{:04}", t.year())),
+        // F42: Tag des Jahres, ISO-Kalenderwoche
+        ("DDD", format!("{:03}", t.ordinal())),
+        ("ww", format!("{:02}", t.iso_week().week())),
         ("MMMM", monat.to_string()),
         ("EEEE", tag.to_string()),
         ("MMM", kurz(monat, 3)),
@@ -244,6 +287,8 @@ pub fn datum_mit_format(t: chrono::NaiveDateTime, fmt: &str, de: bool) -> String
         ("mm", format!("{:02}", t.minute())),
         ("M", t.month().to_string()),
         ("d", t.day().to_string()),
+        ("D", t.ordinal().to_string()),
+        ("w", t.iso_week().week().to_string()),
     ];
     let mut out = String::new();
     let mut rest = fmt;
@@ -272,29 +317,134 @@ pub fn datum_mit_format(t: chrono::NaiveDateTime, fmt: &str, de: bool) -> String
 /// Markiert {{=cursor}} bis zur Auswertung in `engine::nach_popup` (Zeichen aus dem Private-Use-Bereich)
 pub const CURSOR: char = '\u{E000}';
 
-/// Setzt Werte, Datum, Zwischenablage und Cursor-Markierung ein und macht aus "{{{{" ein "{{".
-/// Werte werden maskiert, damit "[[" darin Text bleibt.
+/// Ergebnis von `auswerten`
+pub struct Auswertung {
+    pub text: String,
+    /// Variablen nach dem Baustein: frühere, Werte aus dem Popup, gesetzte (F42)
+    pub variablen: std::collections::HashMap<String, String>,
+    /// Abfragen in gewählten Zweigen, in Reihenfolge (F42 AC-7)
+    pub sichtbar: Vec<String>,
+}
+
+/// Setzt Werte, Variablen, Datum, Zwischenablage, Zufall und Cursor-Markierung ein, wertet Bedingungen aus
+/// und macht aus "{{{{" ein "{{". Werte werden maskiert, damit "[[" darin Text bleibt.
 pub fn einsetzen(inhalt: &str, werte: &std::collections::HashMap<String, String>, auto: &Automatisch) -> String {
-    stuecke(inhalt)
-        .into_iter()
-        .map(|s| match s {
-            Stueck::Text(t) => t.to_string(),
-            Stueck::Klammer("=date" | "=datum") => auto.datum.clone(),
-            Stueck::Klammer(k) if k.starts_with("=date:") || k.starts_with("=datum:") => {
-                let fmt = k.split_once(':').map(|(_, f)| f).unwrap_or_default();
-                match chrono::NaiveDateTime::parse_from_str(&auto.jetzt, "%Y-%m-%dT%H:%M") {
-                    Ok(t) if !fmt.is_empty() => datum_mit_format(t, fmt, auto.de),
-                    _ => auto.datum.clone(),
+    auswerten(inhalt, werte, auto).text
+}
+
+pub fn auswerten(inhalt: &str, werte: &std::collections::HashMap<String, String>, auto: &Automatisch) -> Auswertung {
+    let mut vars = auto.variablen.clone();
+    vars.extend(werte.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let (mut text, mut sichtbar) = (String::new(), vec![]);
+    // je offenem {{#if}}: (aktiv davor, Bedingung erfüllt)
+    let mut stapel: Vec<(bool, bool)> = vec![];
+    let mut aktiv = true;
+    let mut zufall = auto.zufall;
+    for s in stuecke(inhalt) {
+        match s {
+            Stueck::Klammer(k) if k.starts_with("#if ") => {
+                let b = bedingung(&k[4..], &vars);
+                stapel.push((aktiv, b));
+                aktiv &= b;
+            }
+            Stueck::Klammer("#else") => {
+                if let Some(&(davor, b)) = stapel.last() {
+                    aktiv = davor && !b;
                 }
             }
-            Stueck::Klammer("=clipboard") => auto.zwischenablage.as_deref().unwrap_or_default().replace("[[", "[[[["),
-            Stueck::Klammer("=cursor") => CURSOR.to_string(),
-            Stueck::Klammer(k) => match k.strip_prefix('?') {
-                Some(rest) => werte.get(rest.split(':').next().unwrap_or_default()).map(|w| w.replace("[[", "[[[[")).unwrap_or_default(),
-                None => format!("{{{{{k}}}}}"),
-            },
-        })
-        .collect()
+            Stueck::Klammer("#end") => {
+                if let Some((davor, _)) = stapel.pop() {
+                    aktiv = davor;
+                }
+            }
+            _ if !aktiv => {}
+            Stueck::Text(t) => text.push_str(t),
+            Stueck::Klammer(k) => text.push_str(&klammer(k, &mut vars, &mut sichtbar, auto, &mut zufall)),
+        }
+    }
+    Auswertung { text, variablen: vars, sichtbar }
+}
+
+fn bedingung(b: &str, vars: &std::collections::HashMap<String, String>) -> bool {
+    let wert = |n: &str| vars.get(n.trim()).map(|w| w.trim().to_lowercase()).unwrap_or_default();
+    if let Some((n, w)) = b.split_once("!=") {
+        wert(n) != w.trim().to_lowercase()
+    } else if let Some((n, w)) = b.split_once('=') {
+        wert(n) == w.trim().to_lowercase()
+    } else {
+        !wert(b).is_empty()
+    }
+}
+
+/// splitmix64: genügt für die Wahl einer Formulierung
+fn zufallszahl(z: &mut u64) -> u64 {
+    *z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut x = *z;
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+fn klammer(k: &str, vars: &mut std::collections::HashMap<String, String>, sichtbar: &mut Vec<String>, auto: &Automatisch, zufall: &mut u64) -> String {
+    let maskiert = |w: &str| w.replace("[[", "[[[[");
+    if let Some(d) = k.strip_prefix("=date").or_else(|| k.strip_prefix("=datum"))
+        && let Some(t) = datum(d, auto)
+    {
+        return t;
+    }
+    match k {
+        "=clipboard" => return auto.zwischenablage.as_deref().map(maskiert).unwrap_or_default(),
+        "=cursor" => return CURSOR.to_string(),
+        _ => {}
+    }
+    if let Some(o) = k.strip_prefix("=random:") {
+        let o: Vec<&str> = o.split('|').collect();
+        return o[(zufallszahl(zufall) % o.len() as u64) as usize].to_string();
+    }
+    if let Some(v) = k.strip_prefix('$') {
+        return match v.split_once('=') {
+            Some((n, w)) => {
+                vars.insert(n.to_string(), w.to_string());
+                String::new()
+            }
+            None => vars.get(v).map(|w| maskiert(w)).unwrap_or_default(),
+        };
+    }
+    if let Some(rest) = k.strip_prefix('?') {
+        let (name, ..) = feld(rest);
+        if !sichtbar.iter().any(|s| s == name) {
+            sichtbar.push(name.to_string());
+        }
+        return vars.get(name).map(|w| maskiert(w)).unwrap_or_default();
+    }
+    format!("{{{{{k}}}}}")
+}
+
+/// "", "+14", "-1m:dd.MM.yyyy", ":FORMAT" → Datum. None, wenn es kein Datums-Platzhalter ist.
+fn datum(d: &str, auto: &Automatisch) -> Option<String> {
+    let (versatz, fmt) = d.split_once(':').unwrap_or((d, ""));
+    if versatz.is_empty() && fmt.is_empty() {
+        return Some(auto.datum.clone());
+    }
+    let Ok(jetzt) = chrono::NaiveDateTime::parse_from_str(&auto.jetzt, "%Y-%m-%dT%H:%M") else { return Some(auto.datum.clone()) };
+    let t = if versatz.is_empty() {
+        jetzt
+    } else {
+        let (zahl, einheit) = match versatz.char_indices().last() {
+            Some((i, c)) if c.is_ascii_alphabetic() => (&versatz[..i], c),
+            _ => (versatz, 'd'),
+        };
+        let n: i32 = zahl.parse().ok().filter(|_| zahl.starts_with(['+', '-']))?;
+        let monate = |m: i32| if m >= 0 { jetzt.checked_add_months(chrono::Months::new(m as u32)) } else { jetzt.checked_sub_months(chrono::Months::new(m.unsigned_abs())) };
+        match einheit {
+            'd' => jetzt.checked_add_signed(chrono::Duration::days(n as i64)),
+            'w' => jetzt.checked_add_signed(chrono::Duration::weeks(n as i64)),
+            'm' => monate(n),
+            'y' => monate(n * 12),
+            _ => None,
+        }?
+    };
+    Some(if fmt.is_empty() { t.format(if auto.de { "%d.%m.%Y" } else { "%Y-%m-%d" }).to_string() } else { datum_mit_format(t, fmt, auto.de) })
 }
 
 #[cfg(test)]
@@ -320,7 +470,7 @@ mod tests {
 
     #[test]
     fn date_platzhalter_mit_und_ohne_format_f40_ac2() {
-        let auto = Automatisch { datum: "06.03.2026".into(), jetzt: "2026-03-06T09:05".into(), de: true, zwischenablage: None };
+        let auto = Automatisch { datum: "06.03.2026".into(), jetzt: "2026-03-06T09:05".into(), de: true, zwischenablage: None, ..Default::default() };
         let w = std::collections::HashMap::new();
         assert_eq!(einsetzen("{{=date}} / {{=date:d. MMMM}} / {{=datum:yyyy}} / {{=date:}}", &w, &auto), "06.03.2026 / 6. März / 2026 / 06.03.2026");
     }
@@ -347,8 +497,8 @@ mod tests {
         assert_eq!(
             abfragen(&brief.inhalt),
             vec![
-                Abfrage { name: "Anrede".into(), optionen: Some(vec!["Herr".into(), "Frau".into()]) },
-                Abfrage { name: "Name".into(), optionen: None }
+                Abfrage { name: "Anrede".into(), optionen: Some(vec!["Herr".into(), "Frau".into()]), ..Default::default() },
+                Abfrage { name: "Name".into(), optionen: None, ..Default::default() }
             ]
         );
     }
@@ -398,7 +548,7 @@ mod tests {
     #[test]
     fn abfragen_einmal_pro_name_in_reihenfolge_ac6() {
         let a = abfragen("{{?Name}} {{?Gruß:Viele Grüße|}} {{=datum}} {{{{?nicht}} {{?Name}}");
-        assert_eq!(a, vec![Abfrage { name: "Name".into(), optionen: None }, Abfrage { name: "Gruß".into(), optionen: Some(vec!["Viele Grüße".into(), "".into()]) }]);
+        assert_eq!(a, vec![Abfrage { name: "Name".into(), optionen: None, ..Default::default() }, Abfrage { name: "Gruß".into(), optionen: Some(vec!["Viele Grüße".into(), "".into()]), ..Default::default() }]);
         assert!(abfragen("nur {{=datum}} und [[Tab]]").is_empty());
     }
 
@@ -411,5 +561,94 @@ mod tests {
             "Frau Muster [[[[Tab]] {{=datum}}, 04.11.2026 {{?x}} Muster [[[[Tab]] {{=datum}} {{unbekannt}}"
         );
         assert_eq!(aktionen(&einsetzen("{{?Name}}", &werte, &Automatisch::default())), vec![Aktion::Text("Muster [[Tab]] {{=datum}}".into())]);
+    }
+
+    // ---------- F42 ----------
+
+    fn auto_f42() -> Automatisch {
+        Automatisch { datum: "31.01.2026".into(), jetzt: "2026-01-31T09:05".into(), de: true, ..Default::default() }
+    }
+    fn w(paare: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        paare.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn variablen_setzen_und_einsetzen_f42_ac1_ac2_ac3() {
+        let mut auto = auto_f42();
+        auto.variablen = w(&[("Kunde", "Meier")]);
+        let a = auswerten("{{$Kunde}} / {{$Ort=Köln}}Ort: {{$Ort}} / [{{$X}}]", &w(&[]), &auto);
+        assert_eq!(a.text, "Meier / Ort: Köln / []");
+        assert_eq!(a.variablen["Ort"], "Köln");
+        assert_eq!(a.variablen["Kunde"], "Meier");
+        // Abfrage wird zur Variable, spätere Zuweisung überschreibt
+        let a = auswerten("{{?Name*}} {{$Name}} {{$Name=B}}{{$Name}}", &w(&[("Name", "A")]), &auto);
+        assert_eq!(a.text, "A A B");
+        assert_eq!(a.variablen["Name"], "B");
+        // Werte bleiben Text
+        assert_eq!(einsetzen("{{$T}}", &w(&[("T", "[[Tab]]")]), &auto), "[[[[Tab]]");
+    }
+
+    #[test]
+    fn bedingungen_f42_ac6_ac7_ac8_ac10() {
+        let auto = auto_f42();
+        let inhalt = "{{?Anrede:Herr|Frau}} {{#if Anrede=frau }}Liebe{{#else}}Lieber{{#end}}";
+        assert_eq!(einsetzen(inhalt, &w(&[("Anrede", "Frau")]), &auto), "Frau Liebe");
+        assert_eq!(einsetzen(inhalt, &w(&[("Anrede", "Herr")]), &auto), "Herr Lieber");
+        let firma = "{{?Firma}}{{#if Firma}}, z. Hd. {{?Ansprechpartner}}{{#end}}";
+        let a = auswerten(firma, &w(&[]), &auto);
+        assert_eq!((a.text.as_str(), a.sichtbar.clone()), ("", vec!["Firma".to_string()]));
+        let a = auswerten(firma, &w(&[("Firma", "ACME"), ("Ansprechpartner", "Udo")]), &auto);
+        assert_eq!((a.text.as_str(), a.sichtbar), ("ACME, z. Hd. Udo", vec!["Firma".to_string(), "Ansprechpartner".to_string()]));
+        // verschachtelt, != und nicht gewählte Zweige wirken nicht
+        let t = "{{#if a!=x}}1{{#if b}}2{{#else}}3{{$v=nein}}{{#end}}{{#else}}4{{#end}}|{{$v}}";
+        assert_eq!(einsetzen(t, &w(&[("a", "y"), ("b", "1")]), &auto), "12|");
+        assert_eq!(einsetzen(t, &w(&[("a", "y")]), &auto), "13|nein");
+        assert_eq!(einsetzen(t, &w(&[("a", " X ")]), &auto), "4|");
+        assert_eq!(einsetzen("{{#if a}}{{#if b}}{{#if c}}{{#if d}}{{#if e}}tief{{#end}}{{#end}}{{#end}}{{#end}}{{#end}}", &w(&[("a", "1"), ("b", "1"), ("c", "1"), ("d", "1"), ("e", "1")]), &auto), "tief");
+        assert_eq!(einsetzen("{{{{#if a}}", &w(&[]), &auto), "{{#if a}}");
+    }
+
+    #[test]
+    fn datum_verschoben_f42_ac11() {
+        let auto = auto_f42();
+        let t = |s: &str| einsetzen(s, &w(&[]), &auto);
+        assert_eq!(t("{{=date+14}}"), "14.02.2026");
+        assert_eq!(t("{{=date+1m:d. MMMM}}"), "28. Februar");
+        assert_eq!(t("{{=datum-1y}}"), "31.01.2025");
+        assert_eq!(t("{{=date+2w:EEEE}}"), "Samstag");
+        assert_eq!(t("{{=date-31d:yyyy-MM-dd}}"), "2025-12-31");
+        let en = Automatisch { de: false, ..auto_f42() };
+        assert_eq!(einsetzen("{{=date+1}}", &w(&[]), &en), "2026-02-01");
+    }
+
+    #[test]
+    fn kalenderwoche_und_tag_des_jahres_f42_ac12() {
+        assert_eq!(datum_mit_format(zeit("2027-01-01 00:00"), "ww w DDD D", true), "53 53 001 1");
+        assert_eq!(datum_mit_format(zeit("2026-03-06 09:05"), "'KW' ww, 'Tag' D", true), "KW 10, Tag 65");
+    }
+
+    #[test]
+    fn zufall_f42_ac17() {
+        let mut gesehen = std::collections::HashSet::new();
+        for zufall in 0..200 {
+            let auto = Automatisch { zufall, ..auto_f42() };
+            let t = einsetzen("{{=random:a|b|c}}", &w(&[]), &auto);
+            assert!(["a", "b", "c"].contains(&t.as_str()), "{t}");
+            // gleiche Zahl, gleiches Ergebnis (HTML und Text, F10)
+            assert_eq!(t, einsetzen("{{=random:a|b|c}}", &w(&[]), &auto));
+            gesehen.insert(t);
+        }
+        assert_eq!(gesehen.len(), 3);
+    }
+
+    #[test]
+    fn pflicht_und_pruefung_in_abfragen_f42_ac14_ac15() {
+        let a = abfragen("{{?Name*}} {{?Betrag:number}} {{?Mail*:email}} {{?Anrede*:Herr|Frau}}");
+        assert_eq!(a.iter().map(|a| (a.name.as_str(), a.pflicht, a.pruefung.as_deref())).collect::<Vec<_>>(), [("Name", true, None), ("Betrag", false, Some("number")), ("Mail", true, Some("email")), ("Anrede", true, None)]);
+        assert_eq!(a[1].optionen, None);
+        assert!(gueltig(&a[1], "12,50") && gueltig(&a[1], "-3") && gueltig(&a[1], "") && !gueltig(&a[1], "12a"));
+        assert!(gueltig(&a[2], "a@b.de") && !gueltig(&a[2], "a@b") && !gueltig(&a[2], ""));
+        assert!(!gueltig(&a[0], " ") && gueltig(&a[0], "x"));
+        assert_eq!(einsetzen("{{?Name*}}/{{?Betrag:number}}", &w(&[("Name", "A"), ("Betrag", "3")]), &auto_f42()), "A/3");
     }
 }

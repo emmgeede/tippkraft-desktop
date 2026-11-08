@@ -1,7 +1,7 @@
 //! Kernlogik: Puffer, Kürzel-Erkennung, Auslöser, Schreibweise, Rückgängig.
 //! Ohne Tastatur und ohne Wayland, damit alles per Unit-Test prüfbar ist.
 
-use crate::format::{Aktion, Ausloeser, Automatisch, Baustein, CURSOR, Stand, Taste, abfragen, aktionen, einsetzen};
+use crate::format::{Aktion, Ausloeser, Automatisch, Baustein, CURSOR, Stand, Taste, aktionen, auswerten, einsetzen};
 
 /// Fenster des Abfrage-Popups. Darin löst tippkraft nie aus (F8).
 pub const POPUP_APP_ID: &str = "tippkraft-popup";
@@ -69,11 +69,13 @@ pub struct Engine {
     /// Nur für Tests: fester Zeitpunkt für {{=date:FORMAT}}
     festes_jetzt: Option<String>,
     feste_zwischenablage: Option<String>,
+    /// F42: Variablen bis zum Beenden, nur im Speicher
+    variablen: std::collections::HashMap<String, String>,
 }
 
 impl Engine {
     pub fn new(stand: Stand) -> Self {
-        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, festes_jetzt: None, feste_zwischenablage: None };
+        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, festes_jetzt: None, feste_zwischenablage: None, variablen: Default::default() };
         e.stand(stand);
         e
     }
@@ -111,7 +113,13 @@ impl Engine {
     pub fn automatisch(&self, inhalt: &str) -> Automatisch {
         let zwischenablage = inhalt.contains("{{=clipboard}}").then(|| self.feste_zwischenablage.clone().unwrap_or_else(zwischenablage_lesen));
         let jetzt = self.festes_jetzt.clone().unwrap_or_else(|| chrono::Local::now().naive_local().format("%Y-%m-%dT%H:%M").to_string());
-        Automatisch { datum: self.datum(), jetzt, de: crate::i18n::aktuell() == crate::i18n::Sprache::De, zwischenablage }
+        let zufall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or_default();
+        Automatisch { datum: self.datum(), jetzt, de: crate::i18n::aktuell() == crate::i18n::Sprache::De, zwischenablage, variablen: self.variablen.clone(), zufall }
+    }
+
+    /// F42: Variablen nach dem Einfügen eines Bausteins übernehmen (aus `format::auswerten`)
+    pub fn merken(&mut self, variablen: std::collections::HashMap<String, String>) {
+        self.variablen = variablen;
     }
 
     pub fn anzahl(&self) -> usize {
@@ -197,7 +205,9 @@ impl Engine {
         let gross = !b.gross_klein_beachten && b.schreibweise_uebernehmen && gross_anfang(&getippt);
         let loeschen = getippt.chars().count() - zurueckgehalten;
         self.puffer.0.clear();
-        if !abfragen(&b.inhalt).is_empty() {
+        let auto = self.automatisch(&b.inhalt);
+        // F42: nur Felder in gewählten Zweigen zählen. Kein sichtbares Feld, kein Popup.
+        if !auswerten(&b.inhalt, &Default::default(), &auto).sichtbar.is_empty() {
             self.letzte = None;
             // Bei Abbruch den zurückgehaltenen Auslöser nachholen, als wäre nichts passiert
             let abbruch = match b.ausloeser {
@@ -208,11 +218,11 @@ impl Engine {
             };
             return Entscheidung::Popup { titel: getippt, loeschen, inhalt: b.inhalt, html: b.html, gross, abbruch };
         }
-        let auto = self.automatisch(&b.inhalt);
         let akt = match &b.html {
             Some(h) => nach_popup_formatiert(h, &b.inhalt, &Default::default(), &auto, gross),
             None => nach_popup(&b.inhalt, &Default::default(), &auto, gross),
         };
+        self.merken(auswerten(&b.inhalt, &Default::default(), &auto).variablen);
         let nur_text = akt.iter().all(|a| matches!(a, Aktion::Text(_) | Aktion::Html { .. }));
         let eingefuegt = akt
             .iter()
@@ -243,7 +253,12 @@ pub fn nach_popup(inhalt: &str, werte: &std::collections::HashMap<String, String
 pub fn nach_popup_formatiert(html: &str, inhalt: &str, werte: &std::collections::HashMap<String, String>, auto: &Automatisch, gross: bool) -> Vec<Aktion> {
     let text = nach_popup(inhalt, werte, auto, gross);
     let werte_h = werte.iter().map(|(k, v)| (k.clone(), maskieren(v))).collect();
-    let auto_h = Automatisch { datum: maskieren(&auto.datum), zwischenablage: auto.zwischenablage.as_deref().map(maskieren), ..auto.clone() };
+    let auto_h = Automatisch {
+        datum: maskieren(&auto.datum),
+        zwischenablage: auto.zwischenablage.as_deref().map(maskieren),
+        variablen: auto.variablen.iter().map(|(k, v)| (k.clone(), maskieren(v))).collect(),
+        ..auto.clone()
+    };
     let mut teile: Vec<String> = aktionen(&einsetzen(html, &werte_h, &auto_h))
         .into_iter()
         .filter_map(|a| if let Aktion::Text(t) = a { Some(t.replace(CURSOR, "")) } else { None })
@@ -670,5 +685,22 @@ mod tests {
         assert_eq!(tippe(&mut e, "}} {{mfg ").last(), Some(&Durchlassen));
         // ohne Klammern wie bisher
         assert_eq!(tippe(&mut e, " iban").last(), Some(&ersetzt(3, "DE02")));
+    }
+
+    #[test]
+    fn variablen_ueber_bausteine_hinweg_f42_ac1_ac2() {
+        let mut e = engine(vec![b("ort", "{{$Ort=Köln}}", Ausloeser::Leertaste), b("wo", "in {{$Ort}} bei {{$Kunde}}", Ausloeser::Leertaste)]);
+        assert_eq!(tippe(&mut e, "ort ").last(), Some(&Entscheidung::Ersetzen { loeschen: 3, aktionen: vec![] }));
+        // nach dem Popup gemerkt (main ruft merken mit dem Ergebnis von auswerten)
+        let werte = std::collections::HashMap::from([("Kunde".to_string(), "Meier".to_string())]);
+        let a = crate::format::auswerten("{{?Kunde}}", &werte, &e.automatisch(""));
+        e.merken(a.variablen);
+        assert_eq!(tippe(&mut e, "wo ").last(), Some(&ersetzt(2, "in Köln bei Meier")));
+    }
+
+    #[test]
+    fn kein_popup_ohne_sichtbare_felder_f42() {
+        let mut e = engine(vec![b("fa", "Hallo{{#if Firma}} {{?Ansprechpartner}}{{#end}}", Ausloeser::Leertaste)]);
+        assert_eq!(tippe(&mut e, "fa ").last(), Some(&ersetzt(2, "Hallo")));
     }
 }
