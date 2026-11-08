@@ -70,7 +70,17 @@ pub struct Engine {
     festes_jetzt: Option<String>,
     feste_zwischenablage: Option<String>,
     /// F42: Variablen bis zum Beenden, nur im Speicher
-    variablen: std::collections::HashMap<String, String>,
+    variablen: Variablen,
+}
+
+/// Debug zeigt nur die Anzahl, wie beim Puffer (F42 AC-5)
+#[derive(Default)]
+struct Variablen(std::collections::HashMap<String, String>);
+
+impl std::fmt::Debug for Variablen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Variablen({})", self.0.len())
+    }
 }
 
 impl Engine {
@@ -114,12 +124,12 @@ impl Engine {
         let zwischenablage = inhalt.contains("{{=clipboard}}").then(|| self.feste_zwischenablage.clone().unwrap_or_else(zwischenablage_lesen));
         let jetzt = self.festes_jetzt.clone().unwrap_or_else(|| chrono::Local::now().naive_local().format("%Y-%m-%dT%H:%M").to_string());
         let zufall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or_default();
-        Automatisch { datum: self.datum(), jetzt, de: crate::i18n::aktuell() == crate::i18n::Sprache::De, zwischenablage, variablen: self.variablen.clone(), zufall }
+        Automatisch { datum: self.datum(), jetzt, de: crate::i18n::aktuell() == crate::i18n::Sprache::De, zwischenablage, variablen: self.variablen.0.clone(), zufall }
     }
 
     /// F42: Variablen nach dem Einfügen eines Bausteins übernehmen (aus `format::auswerten`)
     pub fn merken(&mut self, variablen: std::collections::HashMap<String, String>) {
-        self.variablen = variablen;
+        self.variablen.0 = variablen;
     }
 
     pub fn anzahl(&self) -> usize {
@@ -544,7 +554,9 @@ mod tests {
     fn puffer_erscheint_nicht_in_debug_ausgaben() {
         let mut e = engine(vec![]);
         tippe(&mut e, "geheim");
+        e.merken(std::collections::HashMap::from([("Kunde".to_string(), "vertraulich".to_string())]));
         assert!(!format!("{e:?}").contains("geheim"));
+        assert!(!format!("{e:?}").contains("vertraulich"), "F42 AC-5: Variablen nie in Debug-Ausgaben");
     }
 
     #[test]
