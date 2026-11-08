@@ -715,4 +715,17 @@ mod tests {
         let mut e = engine(vec![b("fa", "Hallo{{#if Firma}} {{?Ansprechpartner}}{{#end}}", Ausloeser::Leertaste)]);
         assert_eq!(tippe(&mut e, "fa ").last(), Some(&ersetzt(2, "Hallo")));
     }
+    #[test]
+    fn auswahl_aus_dem_handbuch_oeffnet_popup_f55() {
+        // Baustein des Nutzers, wie ihn der Server liefert (Verweis {{xfiban}} schon eingesetzt)
+        let inhalt = "x\n{{#choice Tedst}}{{#option Iban}}DE51700222000071980600{{#option Test}}{{=date}}{{#end}}";
+        let mut e = engine(vec![b(";siml", inhalt, Ausloeser::Sofort)]);
+        e.datum_fest("08.11.2026");
+        assert!(matches!(tippe(&mut e, ";siml").last(), Some(Entscheidung::Popup { .. })));
+        let auto = e.automatisch(inhalt);
+        let w = |v: &str| std::collections::HashMap::from([("Tedst".to_string(), v.to_string())]);
+        assert_eq!(nach_popup(inhalt, &w("Iban"), &auto, false), vec![Aktion::Text("x\nDE51700222000071980600".into())]);
+        assert_eq!(nach_popup(inhalt, &w("Test"), &auto, false), vec![Aktion::Text("x\n08.11.2026".into())]);
+    }
+
 }
