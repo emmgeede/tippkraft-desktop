@@ -413,14 +413,38 @@ enum Rahmen {
 }
 
 fn bedingung(b: &str, vars: &std::collections::HashMap<String, String>) -> bool {
-    let wert = |n: &str| vars.get(n.trim()).map(|w| w.trim().to_lowercase()).unwrap_or_default();
-    if let Some((n, w)) = b.split_once("!=") {
-        wert(n) != w.trim().to_lowercase()
-    } else if let Some((n, w)) = b.split_once('=') {
-        wert(n) == w.trim().to_lowercase()
-    } else {
-        !wert(b).is_empty()
+    // F57: {{#if Name}}, {{#if !Name}}, {{#if Name OP Wert}} mit OP = != >= <= !~ = > < ~, Wert fest oder $Variable
+    let wert = |n: &str| vars.get(n.trim().trim_start_matches('$').trim()).map(|w| w.trim().to_string()).unwrap_or_default();
+    let Some(i) = b.find(['=', '!', '<', '>', '~']) else { return !wert(b).is_empty() };
+    if i == 0 && b.starts_with('!') && !b[1..].contains(['=', '!', '<', '>', '~']) {
+        return wert(&b[1..]).is_empty();
     }
+    let (links, rest) = b.split_at(i);
+    let op = ["!=", ">=", "<=", "!~", "=", ">", "<", "~"].into_iter().find(|o| rest.starts_with(o)).unwrap_or("=");
+    let rechts = rest[op.len()..].trim();
+    let (l, r) = (wert(links), if rechts.starts_with('$') { wert(rechts) } else { rechts.to_string() });
+    let (lk, rk) = (l.to_lowercase(), r.to_lowercase());
+    let zahlen = zahl(&l).zip(zahl(&r));
+    match op {
+        "!=" => zahlen.map_or(lk != rk, |(a, b)| a != b),
+        "=" => zahlen.map_or(lk == rk, |(a, b)| a == b),
+        "~" => lk.contains(&rk),
+        "!~" => !lk.contains(&rk),
+        // größer/kleiner nur für Zahlen, sonst falsch
+        o => zahlen.is_some_and(|(a, b)| match o {
+            ">" => a > b,
+            "<" => a < b,
+            ">=" => a >= b,
+            _ => a <= b,
+        }),
+    }
+}
+
+/// "12,50", "1.234,5", "1234.5", " 7 " als Zahl
+fn zahl(s: &str) -> Option<f64> {
+    let s = s.trim().replace(' ', "");
+    let s = if s.contains(',') { s.replace('.', "").replace(',', ".") } else { s };
+    s.parse::<f64>().ok().filter(|z| z.is_finite())
 }
 
 /// splitmix64: genügt für die Wahl einer Formulierung
@@ -633,6 +657,33 @@ mod tests {
         assert_eq!(a.variablen["Name"], "B");
         // Werte bleiben Text
         assert_eq!(einsetzen("{{$T}}", &w(&[("T", "[[Tab]]")]), &auto), "[[[[Tab]]");
+    }
+
+    #[test]
+    fn vergleiche_f57() {
+        let auto = auto_f42();
+        let v = |p: &[(&str, &str)], b: &str| bedingung(b, &w(p));
+        // Zahlen werden als Zahlen verglichen, auch mit Komma
+        assert!(v(&[("Preis", "9")], "Preis<10"));
+        assert!(!v(&[("Preis", "9")], "Preis>10"));
+        assert!(v(&[("Preis", "12,50")], "Preis > 12"));
+        assert!(v(&[("Preis", "1.234,5")], "Preis>=1234.5"));
+        assert!(v(&[("Preis", "10")], "Preis<=10"));
+        assert!(v(&[("Preis", "10.0")], "Preis=10"));
+        // größer/kleiner mit Text ist falsch
+        assert!(!v(&[("A", "abc")], "A>1"));
+        // Vergleichswert aus einer Variable
+        assert!(v(&[("Preis", "120"), ("Limit", "100")], "Preis>$Limit"));
+        assert!(!v(&[("Preis", "80"), ("Limit", "100")], "$Preis > $Limit"));
+        assert!(v(&[("A", "Frau"), ("B", "frau")], "A=$B"));
+        // enthält, enthält nicht, leer
+        assert!(v(&[("Mail", "max@ACME.de")], "Mail~acme"));
+        assert!(v(&[("Mail", "max@web.de")], "Mail!~acme"));
+        assert!(v(&[], "!Firma"));
+        assert!(!v(&[("Firma", "ACME")], "!Firma"));
+        // als Block
+        assert_eq!(einsetzen("{{?Betrag}}{{#if Betrag>=100}} Rabatt{{#else}} kein Rabatt{{#end}}", &w(&[("Betrag", "150")]), &auto), "150 Rabatt");
+        assert_eq!(einsetzen("{{#set Art}}{{?Art:Privat|Firma}}{{#end}}{{#if Art=Firma}}Sehr geehrte Damen und Herren{{#else}}Hallo{{#end}}", &w(&[("Art", "Firma")]), &auto), "Sehr geehrte Damen und Herren");
     }
 
     #[test]

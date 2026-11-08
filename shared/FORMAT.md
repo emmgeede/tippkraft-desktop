@@ -56,3 +56,12 @@ Formatversion bleibt 2. Ältere Desktops tippen diese Makros als Text.
 - `{{#set Name}}…{{#end}}`: Inhalt auswerten und als Text in die Variable schreiben, nichts einfügen. Tasten-Tokens darin werden zu Text.
 - Verweise `{{kürzel}}` löst der Server bis zu 5 Ebenen tief auf, Kreise lehnt er beim Speichern ab.
 - Reihenfolge auf dem Desktop: Platzhalter und `{{{{` ersetzen (eingegebene Werte mit `[[` werden zu `[[[[` maskiert), danach Tasten-Tokens auswerten.
+
+## Bedingung mit Vergleich (F57)
+
+- `{{#if Name OP Wert}}` mit OP `=`, `!=`, `~` (enthält), `!~` (enthält nicht), `>`, `<`, `>=`, `<=`. `{{#if Name}}` = ausgefüllt, `{{#if !Name}}` = leer. `Name` darf mit `$` beginnen.
+- `Wert` ist fest oder `$Variable` (Wert der Variable bzw. Abfrage/Auswahl). Groß-/Kleinschreibung egal.
+- Sind beide Seiten Zahlen (`12,50`, `1.234,5`, `12.5`), wird als Zahl verglichen, auch bei `=`/`!=`. `>`/`<`/`>=`/`<=` sind bei Text immer falsch.
+- Namen von Variablen, Abfragen und Auswahlen enthalten kein `<`, `>`, `~` (Server lehnt ab).
+- Eine Abfrage nur für die Bedingung: `{{#set Name}}{{?Name:a|b}}{{#end}}` fragt, fügt aber nichts ein.
+- Desktop ab 0.1.20. Ältere werten neue Vergleiche als „nicht ausgefüllt“ und nehmen den Sonst-Zweig.
