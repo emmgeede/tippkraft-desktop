@@ -112,7 +112,13 @@ struct App {
     fokus_gesetzt: Option<usize>,
     /// F42: Feld mit Pflicht- oder Prüffehler nach Enter
     fehler: Option<(usize, T)>,
+    /// Zuletzt gesetzte Fensterhöhe, das Fenster wächst und schrumpft mit dem Inhalt
+    hoehe: f32,
 }
+
+/// Lange Vorschauen scrollen, statt das Fenster über den Bildschirm wachsen zu lassen
+const VORSCHAU_MAX: f32 = 260.0;
+const RAND: f32 = 20.0;
 
 /// Farben wie im Webtool (web/src/layouts/Layout.astro), hell und dunkel
 pub(crate) struct Farben {
@@ -217,8 +223,27 @@ impl eframe::App for App {
         let mut einfuegen = enter;
         let f = farben(ui.visuals().dark_mode);
 
-        let rand = egui::Frame::new().fill(f.bg).inner_margin(egui::Margin::same(20));
+        // Knöpfe fest unten, damit sie immer sichtbar sind, auch wenn das Fenster kleiner bleibt als der Inhalt
+        let leiste = egui::Frame::new().fill(f.bg).inner_margin(egui::Margin { left: RAND as i8, right: RAND as i8, top: 10, bottom: RAND as i8 });
+        let unten = egui::Panel::bottom("knoepfe").frame(leiste).show_separator_line(false).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let primaer = egui::Button::new(RichText::new(tr(T::PopupEinfuegen)).color(egui::Color32::WHITE)).fill(f.knopf).stroke(egui::Stroke::NONE);
+                if ui.add(primaer).clicked() {
+                    einfuegen = true;
+                }
+                if ui.add(egui::Button::new(tr(T::PopupAbbrechen)).fill(f.bg)).clicked() {
+                    abbrechen = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(tr(T::PopupTasten)).color(f.muted).size(12.5));
+                });
+            });
+        });
+        let rand = egui::Frame::new().fill(f.bg).inner_margin(egui::Margin { left: RAND as i8, right: RAND as i8, top: RAND as i8, bottom: 0 });
+        let mut benoetigt = 0.0;
+        let mut vorschau_fehlt = 0.0;
         egui::CentralPanel::default().frame(rand).show(ui, |ui| {
+          egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tr(T::PopupBaustein)).color(f.muted).size(13.0));
                 ui.label(RichText::new(&self.anfrage.titel).monospace().color(f.accent).size(15.0));
@@ -276,22 +301,23 @@ impl eframe::App for App {
             ui.label(RichText::new(tr(T::PopupVorschau)).color(f.muted).size(13.0));
             egui::Frame::new().fill(f.flaeche).corner_radius(6).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &self.anfrage.auto)).monospace());
-            });
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                let primaer = egui::Button::new(RichText::new(tr(T::PopupEinfuegen)).color(egui::Color32::WHITE)).fill(f.knopf).stroke(egui::Stroke::NONE);
-                if ui.add(primaer).clicked() {
-                    einfuegen = true;
-                }
-                if ui.add(egui::Button::new(tr(T::PopupAbbrechen)).fill(f.bg)).clicked() {
-                    abbrechen = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(tr(T::PopupTasten)).color(f.muted).size(12.5));
+                let v = egui::ScrollArea::vertical().id_salt("vorschau").max_height(VORSCHAU_MAX).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.label(RichText::new(self.f.vorschau(&self.anfrage.inhalt, &self.anfrage.auto)).monospace());
                 });
+                // Platz, der der Vorschau bis VORSCHAU_MAX noch fehlt, weil das Fenster zu klein ist
+                vorschau_fehlt = (v.content_size.y.min(VORSCHAU_MAX) - v.inner_rect.height()).max(0.0);
             });
+            ui.add_space(4.0);
+            benoetigt = ui.min_rect().height() + RAND;
+          });
         });
+        // Fenster an den Inhalt anpassen: Vorschau mit eingesetzten Bausteinen, Fehlermeldungen, ein- und ausgeblendete Felder.
+        // Manche Fenstermanager übernehmen das nicht, dann scrollt der Inhalt und die Knöpfe bleiben trotzdem sichtbar.
+        let benoetigt = benoetigt + vorschau_fehlt + unten.response.rect.height();
+        if let Some(h) = hoehe_anpassen(self.hoehe, benoetigt) {
+            self.hoehe = h;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(BREITE, h)));
+        }
 
         if einfuegen && let Some(fehler) = self.f.fehler(&sichtbar) {
             // F42: Popup bleibt offen, Fokus aufs Feld mit dem Fehler
@@ -307,14 +333,30 @@ impl eframe::App for App {
     }
 }
 
+const BREITE: f32 = 520.0;
+
+/// Neue Fensterhöhe, wenn der Inhalt merklich mehr oder weniger Platz braucht (ganze Pixel, kein Flackern)
+fn hoehe_anpassen(aktuell: f32, benoetigt: f32) -> Option<f32> {
+    let h = benoetigt.ceil();
+    (h > 0.0 && (h - aktuell).abs() >= 2.0).then_some(h)
+}
+
+/// Starthöhe aus der fertigen Vorschau (eingesetzte Bausteine, umbrochene lange Zeilen), nicht aus dem Rohtext.
+/// Nicht jeder Fenstermanager übernimmt spätere Größenänderungen (niri), deshalb muss der Start schon passen.
+fn start_hoehe(vorschau: &str, felder: usize) -> f32 {
+    const ZEICHEN_JE_ZEILE: usize = 44; // Monospace bei 520 px Breite, eher knapp gerechnet
+    let zeilen: usize = vorschau.lines().map(|z| z.chars().count().max(1).div_ceil(ZEICHEN_JE_ZEILE)).sum();
+    218.0 + 72.0 * felder as f32 + (18.0 * zeilen.max(1) as f32).min(VORSCHAU_MAX)
+}
+
 /// Zeigt das Popup und liefert die Werte, `None` bei Abbruch
 pub fn zeigen(anfrage: Anfrage) -> Result<Option<HashMap<String, String>>, String> {
     let f = Formular::neu(&anfrage.inhalt, &anfrage.auto);
-    let hoehe = 236.0 + 72.0 * f.abfragen.len() as f32 + 18.0 * anfrage.inhalt.lines().count().saturating_sub(1) as f32;
+    let hoehe = start_hoehe(&f.vorschau(&anfrage.inhalt, &anfrage.auto), f.abfragen.len());
     let ergebnis = Arc::new(Mutex::new(None));
-    let app = App { anfrage, f, ergebnis: ergebnis.clone(), fokus_gesetzt: None, fehler: None };
+    let app = App { anfrage, f, ergebnis: ergebnis.clone(), fokus_gesetzt: None, fehler: None, hoehe };
     let optionen = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_app_id(POPUP_APP_ID).with_title("tippkraft").with_inner_size([520.0, hoehe]),
+        viewport: egui::ViewportBuilder::default().with_app_id(POPUP_APP_ID).with_title("tippkraft").with_inner_size([BREITE, hoehe]),
         ..Default::default()
     };
     eframe::run_native(
@@ -333,6 +375,18 @@ pub fn zeigen(anfrage: Anfrage) -> Result<Option<HashMap<String, String>>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fensterhoehe_folgt_dem_inhalt() {
+        assert_eq!(hoehe_anpassen(300.0, 420.4), Some(421.0));
+        assert_eq!(hoehe_anpassen(421.0, 300.0), Some(300.0));
+        assert_eq!(hoehe_anpassen(421.0, 420.2), None);
+        assert_eq!(hoehe_anpassen(300.0, 0.0), None);
+        // lange Zeilen und eingesetzte Bausteine zählen, die Vorschau ist gedeckelt
+        assert_eq!(start_hoehe("kurz", 1), 218.0 + 72.0 + 18.0);
+        assert_eq!(start_hoehe(&"x".repeat(105), 0), 218.0 + 54.0);
+        assert_eq!(start_hoehe(&"a\n".repeat(100), 0), 218.0 + VORSCHAU_MAX);
+    }
 
     #[test]
     fn formular_tab_auswahl_werte_vorschau_ac11_ac12() {
