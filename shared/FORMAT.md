@@ -49,4 +49,10 @@ Formatversion bleibt 2. Ältere Desktops tippen diese Makros als Text.
 - `{{$Name}}`: Variable einsetzen, `{{$Name=Text}}`: setzen (fügt nichts ein). Jede Abfrage ist zugleich Variable. Variablen leben nur im Speicher der Desktop-App.
 - `{{#if Name}}`, `{{#if Name=Wert}}`, `{{#if Name!=Wert}}` … `{{#else}}` … `{{#end}}`: Bedingung, bis 5 Ebenen. Vergleich ohne Groß/klein und Leerzeichen am Rand. Abfragen in nicht gewählten Zweigen zeigt das Popup nicht. Der Server garantiert, dass Blöcke geschlossen sind.
 
+
+## Auswahl mit Inhalt, Variable aus Inhalt (F55)
+
+- `{{#choice Name}}{{#option A}}…{{#option B}}…{{#end}}`: Auswahl im Popup mit den Namen der Möglichkeiten (2 bis 20). Eingefügt wird der Inhalt der gewählten Möglichkeit, der wieder alles enthalten darf. `Name` wird zur Variable mit dem Namen der gewählten Möglichkeit. Abfragen in nicht gewählten Möglichkeiten zeigt das Popup nicht.
+- `{{#set Name}}…{{#end}}`: Inhalt auswerten und als Text in die Variable schreiben, nichts einfügen. Tasten-Tokens darin werden zu Text.
+- Verweise `{{kürzel}}` löst der Server bis zu 5 Ebenen tief auf, Kreise lehnt er beim Speichern ab.
 - Reihenfolge auf dem Desktop: Platzhalter und `{{{{` ersetzen (eingegebene Werte mit `[[` werden zu `[[[[` maskiert), danach Tasten-Tokens auswerten.

@@ -225,10 +225,28 @@ fn stuecke(inhalt: &str) -> Vec<Stueck<'_>> {
 /// Abfragen in Reihenfolge des ersten Vorkommens, jeder Name einmal
 pub fn abfragen(inhalt: &str) -> Vec<Abfrage> {
     let mut out: Vec<Abfrage> = vec![];
+    // F55: offene Blöcke, bei {{#choice}} der Index der Abfrage, die die Möglichkeiten sammelt
+    let mut bloecke: Vec<Option<usize>> = vec![];
     for s in stuecke(inhalt) {
-        if let Stueck::Klammer(k) = s
-            && let Some(rest) = k.strip_prefix('?')
-        {
+        let Stueck::Klammer(k) = s else { continue };
+        if let Some(name) = k.strip_prefix("#choice ") {
+            let name = name.trim();
+            let neu = !out.iter().any(|a| a.name == name);
+            if neu {
+                out.push(Abfrage { name: name.into(), optionen: Some(vec![]), ..Default::default() });
+            }
+            bloecke.push(neu.then_some(out.len() - 1));
+        } else if let Some(o) = k.strip_prefix("#option ") {
+            if let Some(Some(i)) = bloecke.last()
+                && let Some(liste) = out[*i].optionen.as_mut()
+            {
+                liste.push(o.to_string());
+            }
+        } else if k.starts_with("#if ") || k.starts_with("#set ") {
+            bloecke.push(None);
+        } else if k == "#end" {
+            bloecke.pop();
+        } else if let Some(rest) = k.strip_prefix('?') {
             let (name, pflicht, nach) = feld(rest);
             let pruefung = nach.filter(|o| matches!(*o, "number" | "email")).map(String::from);
             let optionen = nach.filter(|_| pruefung.is_none()).map(|o| o.split('|').map(String::from).collect());
@@ -336,33 +354,62 @@ pub fn auswerten(inhalt: &str, werte: &std::collections::HashMap<String, String>
     let mut vars = auto.variablen.clone();
     vars.extend(werte.iter().map(|(k, v)| (k.clone(), v.clone())));
     let (mut text, mut sichtbar) = (String::new(), vec![]);
-    // je offenem {{#if}}: (aktiv davor, Bedingung erfüllt)
-    let mut stapel: Vec<(bool, bool)> = vec![];
+    let mut stapel: Vec<Rahmen> = vec![];
     let mut aktiv = true;
     let mut zufall = auto.zufall;
     for s in stuecke(inhalt) {
         match s {
             Stueck::Klammer(k) if k.starts_with("#if ") => {
                 let b = bedingung(&k[4..], &vars);
-                stapel.push((aktiv, b));
+                stapel.push(Rahmen::Wenn { davor: aktiv, erfuellt: b });
                 aktiv &= b;
             }
             Stueck::Klammer("#else") => {
-                if let Some(&(davor, b)) = stapel.last() {
-                    aktiv = davor && !b;
+                if let Some(&Rahmen::Wenn { davor, erfuellt }) = stapel.last() {
+                    aktiv = davor && !erfuellt;
                 }
             }
-            Stueck::Klammer("#end") => {
-                if let Some((davor, _)) = stapel.pop() {
+            // F55: Auswahl mit eigenem Inhalt je Möglichkeit. Gewählt ist, was im Popup (oder als Variable) steht.
+            Stueck::Klammer(k) if k.starts_with("#choice ") => {
+                let name = k[8..].trim();
+                if aktiv && !sichtbar.iter().any(|s| s == name) {
+                    sichtbar.push(name.to_string());
+                }
+                stapel.push(Rahmen::Auswahl { davor: aktiv, gewaehlt: vars.get(name).cloned().unwrap_or_default() });
+                aktiv = false;
+            }
+            Stueck::Klammer(k) if k.starts_with("#option ") => {
+                if let Some(Rahmen::Auswahl { davor, gewaehlt }) = stapel.last() {
+                    aktiv = *davor && k[8..] == **gewaehlt;
+                }
+            }
+            // F55: Inhalt auswerten und in die Variable schreiben statt einfügen
+            Stueck::Klammer(k) if k.starts_with("#set ") => stapel.push(Rahmen::Setzen { davor: aktiv, name: k[5..].trim().to_string(), start: text.len() }),
+            Stueck::Klammer("#end") => match stapel.pop() {
+                Some(Rahmen::Setzen { davor, name, start }) => {
+                    if davor {
+                        // Variablen halten Text: Maskierung zurück, Cursor-Markierung weg
+                        vars.insert(name, text[start..].replace("[[[[", "[[").replace(CURSOR, ""));
+                    }
+                    text.truncate(start);
                     aktiv = davor;
                 }
-            }
+                Some(Rahmen::Wenn { davor, .. } | Rahmen::Auswahl { davor, .. }) => aktiv = davor,
+                None => {}
+            },
             _ if !aktiv => {}
             Stueck::Text(t) => text.push_str(t),
             Stueck::Klammer(k) => text.push_str(&klammer(k, &mut vars, &mut sichtbar, auto, &mut zufall)),
         }
     }
     Auswertung { text, variablen: vars, sichtbar }
+}
+
+/// Offener Block beim Auswerten
+enum Rahmen {
+    Wenn { davor: bool, erfuellt: bool },
+    Auswahl { davor: bool, gewaehlt: String },
+    Setzen { davor: bool, name: String, start: usize },
 }
 
 fn bedingung(b: &str, vars: &std::collections::HashMap<String, String>) -> bool {
@@ -650,5 +697,42 @@ mod tests {
         assert!(gueltig(&a[2], "a@b.de") && !gueltig(&a[2], "a@b") && !gueltig(&a[2], ""));
         assert!(!gueltig(&a[0], " ") && gueltig(&a[0], "x"));
         assert_eq!(einsetzen("{{?Name*}}/{{?Betrag:number}}", &w(&[("Name", "A"), ("Betrag", "3")]), &auto_f42()), "A/3");
+    }
+
+    // ---------- F55 ----------
+
+    #[test]
+    fn auswahl_mit_eigenem_inhalt_f55() {
+        let auto = auto_f42();
+        let inhalt = "{{#choice Anrede}}\n{{#option Herr}}Lieber Herr {{?Name}}{{#option Frau}}Liebe Frau {{?Name}}{{#option Firma}}Hallo {{#choice Team}}{{#option A}}Team A{{#option B}}Team B{{#end}}{{#end}}!";
+        let a = abfragen(inhalt);
+        assert_eq!(a.iter().map(|a| (a.name.as_str(), a.optionen.clone())).collect::<Vec<_>>(), [
+            ("Anrede", Some(vec!["Herr".to_string(), "Frau".into(), "Firma".into()])),
+            ("Name", None),
+            ("Team", Some(vec!["A".to_string(), "B".into()])),
+        ]);
+        let r = auswerten(inhalt, &w(&[("Anrede", "Frau"), ("Name", "Muster"), ("Team", "A")]), &auto);
+        assert_eq!(r.text, "Liebe Frau Muster!");
+        assert_eq!(r.sichtbar, ["Anrede", "Name"], "Team nur bei Firma");
+        let r = auswerten(inhalt, &w(&[("Anrede", "Firma"), ("Team", "B")]), &auto);
+        assert_eq!((r.text.as_str(), r.sichtbar), ("Hallo Team B!", vec!["Anrede".to_string(), "Team".into()]));
+        assert_eq!(r.variablen["Anrede"], "Firma", "Auswahl ist Variable mit dem Namen der Möglichkeit");
+        // nichts gewählt (z. B. ohne Popup): nichts eingefügt
+        assert_eq!(einsetzen(inhalt, &w(&[]), &auto), "!");
+    }
+
+    #[test]
+    fn variable_aus_inhalt_setzen_f55() {
+        let auto = auto_f42();
+        let inhalt = "{{#set Kunde}}{{?Vorname}} {{?Nachname}}{{#end}}Hallo {{$Kunde}}{{#choice Tarif}}{{#option Pro}}{{#set Preis}}19 {{$W}} bis {{=date+14}}{{#end}}{{#option Free}}{{$Preis=0}}{{#end}} – {{$Preis}}";
+        let r = auswerten(inhalt, &w(&[("Vorname", "Udo"), ("Nachname", "[[Tab]]"), ("Tarif", "Pro"), ("W", "€")]), &auto);
+        assert_eq!(r.text, "Hallo Udo [[[[Tab]] – 19 € bis 14.02.2026");
+        assert_eq!(r.variablen["Kunde"], "Udo [[Tab]]", "Variablen halten Text, keine Tasten");
+        assert_eq!(r.variablen["Preis"], "19 € bis 14.02.2026");
+        assert_eq!(einsetzen(inhalt, &w(&[("Tarif", "Free")]), &auto), "Hallo   – 0");
+        // in einem nicht gewählten Zweig wirkt #set nicht
+        let mut a2 = auto_f42();
+        a2.variablen.insert("X".into(), "alt".into());
+        assert_eq!(auswerten("{{#if n}}{{#set X}}neu{{#end}}{{#end}}{{$X}}", &w(&[]), &a2).text, "alt");
     }
 }
