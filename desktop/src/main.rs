@@ -48,10 +48,10 @@ fn main() {
         Some("einrichten" | "setup") => einrichten(&args[1..]),
         Some("popup") => popup(),
         // F22: zeigt jeden erkannten Fensterwechsel (Fehlersuche, Container-Tests)
-        Some("fokus") => {
+        Some("focus" | "fokus") => {
             tippkraft::fokus::dauerhaft(|app| {
                 use std::io::Write;
-                println!("fokus: {}", app.as_deref().unwrap_or("-"));
+                println!("focus: {}", app.as_deref().unwrap_or("-"));
                 let _ = std::io::stdout().flush();
             });
             Ok(())
@@ -177,10 +177,10 @@ fn tastenkuerzel(home: &std::path::Path, ziel: &std::path::Path, erneut: bool) {
     }
 }
 
-/// Ja/Nein vom Terminal. None: kein Terminal (z. B. Dienst, Test). TIPPKRAFT_ANTWORT ersetzt die Eingabe in Tests.
+/// Ja/Nein vom Terminal. None: kein Terminal (z. B. Dienst, Test). TIPPKRAFT_ANSWER (y/n, alt: TIPPKRAFT_ANTWORT) ersetzt die Eingabe.
 fn frage_tastenkuerzel() -> Option<bool> {
     use std::io::{BufRead, Write};
-    let zeile = match std::env::var("TIPPKRAFT_ANTWORT") {
+    let zeile = match std::env::var("TIPPKRAFT_ANSWER").or_else(|_| std::env::var("TIPPKRAFT_ANTWORT")) {
         Ok(a) => a,
         Err(_) => {
             let mut tty = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty").ok()?;
@@ -300,7 +300,7 @@ fn einrichten(args: &[String]) -> Result<(), String> {
     std::fs::write(&starter, format!("[Desktop Entry]\nType=Application\nName=Connect tippkraft\nName[de]=tippkraft verbinden\nComment=Connect the desktop app to your tippkraft account\nComment[de]=Desktop-App mit dem tippkraft-Konto verbinden\nExec={} connect\nIcon=input-keyboard\nTerminal=false\nCategories=Utility;\n", ziel.display())).map_err(|e| e.to_string())?;
     println!("{}", i18n::f(i18n::aktuell(), T::Eingerichtet, &[&ziel.display()]));
     // F43: Tastenkürzel nach einmaliger Rückfrage einrichten, sonst wie bisher zum Kopieren ausgeben
-    tastenkuerzel(&home, &ziel, args.iter().any(|a| a == "--tastenkuerzel"));
+    tastenkuerzel(&home, &ziel, args.iter().any(|a| a == "--shortcuts" || a == "--tastenkuerzel"));
     if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
         println!("{}\n{}\n", tr(T::AusschlussGnome), tr(T::TrayGnome));
     }
@@ -495,10 +495,11 @@ fn optionen(args: &[String], pfade: &mut Pfade) -> Result<Optionen, String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--stand" => pfade.stand = it.next().ok_or("--stand braucht einen Pfad")?.into(),
-            "--geraet" => o.geraete.push(it.next().ok_or("--geraet braucht einen Pfad")?.into()),
-            "--verzoegerung" => o.verzoegerung = Duration::from_millis(it.next().and_then(|v| v.parse().ok()).ok_or("--verzoegerung braucht Millisekunden")?),
-            "--trocken" => o.trocken = true,
+            // Englische Namen, die deutschen bleiben als Alias für ältere Skripte und Units
+            "--state" | "--stand" => pfade.stand = it.next().ok_or("--state needs a path")?.into(),
+            "--device" | "--geraet" => o.geraete.push(it.next().ok_or("--device needs a path")?.into()),
+            "--delay" | "--verzoegerung" => o.verzoegerung = Duration::from_millis(it.next().and_then(|v| v.parse().ok()).ok_or("--delay needs milliseconds")?),
+            "--dry-run" | "--trocken" => o.trocken = true,
             _ => return Err(format!("{a}?\n\n{}", tr(T::Hilfe))),
         }
     }

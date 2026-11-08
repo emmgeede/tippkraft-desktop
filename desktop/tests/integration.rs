@@ -1,5 +1,5 @@
 //! Startet tippkraft im Trocken-Modus gegen eine virtuelle Testtastatur.
-//! Die echte Tastatur und das fokussierte Fenster bleiben unberührt (--geraet, --trocken).
+//! Die echte Tastatur und das fokussierte Fenster bleiben unberührt (--device, --dry-run).
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -67,11 +67,11 @@ fn starten_mit(name: &str, env: &[(&str, &str)], umgebung: Vec<(String, String)>
     // udev braucht einen Moment für die Rechte am Gerät
     std::thread::sleep(Duration::from_millis(300));
 
-    let mut args = vec!["run".to_string(), "--trocken".into(), "--geraet".into(), pfad.to_string_lossy().into_owned()];
+    let mut args = vec!["run".to_string(), "--dry-run".into(), "--device".into(), pfad.to_string_lossy().into_owned()];
     if let Some(inhalt) = stand {
         let datei = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("stand-{name}.json"));
         std::fs::write(&datei, inhalt).unwrap();
-        args.extend(["--stand".into(), datei.to_string_lossy().into_owned()]);
+        args.extend(["--state".into(), datei.to_string_lossy().into_owned()]);
     }
     let mut kind = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
         .args(&args)
@@ -268,7 +268,7 @@ fn warten_bis(max: Duration, mut f: impl FnMut() -> bool) -> bool {
 /// Startet `tippkraft verbinden` ohne echten Browser und liefert (Prozess, Port, state, challenge)
 fn verbinden_starten(u: &[(String, String)], args: &[&str]) -> (Child, u16, String, String) {
     let mut kind = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
-        .arg("verbinden")
+        .arg("connect")
         .args(args)
         .envs(u.iter().map(|(a, b)| (a, b)))
         .env("TIPPKRAFT_BROWSER", "true")
@@ -351,7 +351,7 @@ fn verbinden_abgebrochen_oder_falscher_code_f12_ac14() {
     assert!(!std::path::PathBuf::from(&u[0].1).join("tippkraft/zugang.json").exists());
 
     // http ohne localhost wird abgelehnt (F6 AC-3)
-    let (code, out) = cli(&u, &["verbinden", "--server", "http://tippkraft.com"]);
+    let (code, out) = cli(&u, &["connect", "--server", "http://tippkraft.com"]);
     assert_ne!(code, 0);
     assert!(out.contains("https"), "{out}");
 }
@@ -489,7 +489,7 @@ fn steuer_socket_nur_fuer_den_nutzer() {
 #[test]
 fn zweite_instanz_wird_abgelehnt_ac11() {
     let l = starten("instanz", &[]);
-    let (code, out) = cli(&l.umgebung, &["run", "--trocken", "--geraet", l.pfad.to_str().unwrap()]);
+    let (code, out) = cli(&l.umgebung, &["run", "--dry-run", "--device", l.pfad.to_str().unwrap()]);
     assert_ne!(code, 0);
     assert!(out.contains("läuft schon"), "{out}");
     assert!(status(&l).contains("aktiv"), "erste Instanz läuft weiter");
@@ -510,8 +510,8 @@ fn einrichten_installiert_und_aktiviert_ac13() {
     std::fs::write(home.join(".config/tippkraft/zugang.json"), r#"{"server":"http://localhost:4321","token":"tk_x"}"#).unwrap();
     for _ in 0..2 {
         let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
-            .arg("einrichten")
-            .env("TIPPKRAFT_ANTWORT", "n")
+            .arg("setup")
+            .env("TIPPKRAFT_ANSWER", "n")
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
@@ -548,8 +548,8 @@ fn einrichten_ohne_verbindung_startet_verbinden_f12_ac16() {
     std::fs::write(&browser, format!("#!/bin/sh\necho \"$1\" > '{}'\n", url_datei.display())).unwrap();
     std::fs::set_permissions(&browser, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let mut kind = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
-        .arg("einrichten")
-        .env("TIPPKRAFT_ANTWORT", "n")
+        .arg("setup")
+        .env("TIPPKRAFT_ANSWER", "n")
         .env("HOME", &home)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
@@ -693,8 +693,8 @@ fn einrichten_unter_x11_nennt_tastenkuerzel_und_legt_autostart_an_f36_ac6() {
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     for (desktop, weg) in [("XFCE", "Xfce: Einstellungen → Tastatur"), ("X-Cinnamon", "Cinnamon: Systemeinstellungen → Tastatur")] {
         let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
-            .arg("einrichten")
-            .env("TIPPKRAFT_ANTWORT", "n")
+            .arg("setup")
+            .env("TIPPKRAFT_ANSWER", "n")
             .env("HOME", &home)
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
@@ -729,10 +729,10 @@ fn einrichten_legt_tastenkuerzel_fuer_niri_an_und_fragt_nur_einmal_f43() {
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let lauf = |antwort: Option<&str>| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_tippkraft"));
-        c.arg("einrichten").env("HOME", &home).env_remove("XDG_CONFIG_HOME").env_remove("XDG_DATA_HOME").env_remove("SWAYSOCK").env_remove("HYPRLAND_INSTANCE_SIGNATURE").env("NIRI_SOCKET", "/nicht/da").env("TIPPKRAFT_SYSTEMCTL", &fake).env("TIPPKRAFT_SPRACHE", "de").stdin(Stdio::null());
+        c.arg("setup").env("HOME", &home).env_remove("XDG_CONFIG_HOME").env_remove("XDG_DATA_HOME").env_remove("SWAYSOCK").env_remove("HYPRLAND_INSTANCE_SIGNATURE").env("NIRI_SOCKET", "/nicht/da").env("TIPPKRAFT_SYSTEMCTL", &fake).env("TIPPKRAFT_SPRACHE", "de").stdin(Stdio::null());
         match antwort {
-            Some(a) => c.env("TIPPKRAFT_ANTWORT", a),
-            None => c.env_remove("TIPPKRAFT_ANTWORT"),
+            Some(a) => c.env("TIPPKRAFT_ANSWER", a),
+            None => c.env_remove("TIPPKRAFT_ANSWER"),
         };
         let out = c.output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -748,4 +748,13 @@ fn einrichten_legt_tastenkuerzel_fuer_niri_an_und_fragt_nur_einmal_f43() {
     let text = lauf(None);
     assert!(!text.contains("Tastenkürzel"), "{text}");
     assert_eq!(std::fs::read_to_string(home.join(".config/niri/config.kdl")).unwrap().matches("tippkraft-tasten.kdl").count(), 1);
+    // --shortcuts fragt erneut; die alten deutschen Namen funktionieren weiter
+    for (option, var) in [("--shortcuts", "TIPPKRAFT_ANSWER"), ("--tastenkuerzel", "TIPPKRAFT_ANTWORT")] {
+        let out = Command::new(env!("CARGO_BIN_EXE_tippkraft"))
+            .args(["setup", option]).env("HOME", &home).env_remove("XDG_CONFIG_HOME").env_remove("XDG_DATA_HOME").env_remove("SWAYSOCK").env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+            .env("NIRI_SOCKET", "/nicht/da").env("TIPPKRAFT_SYSTEMCTL", &fake).env("TIPPKRAFT_SPRACHE", "de").env_remove("TIPPKRAFT_ANSWER").env(var, "n").stdin(Stdio::null())
+            .output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(std::fs::read_to_string(home.join(".config/tippkraft/tastenkuerzel")).unwrap(), "nein", "{option}");
+    }
 }

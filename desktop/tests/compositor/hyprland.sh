@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # F22: startet Hyprland verschachtelt (braucht eine laufende Wayland-Sitzung und GPU) und prüft,
-# dass `tippkraft fokus` jeden Fensterwechsel meldet. Aufruf: tests/compositor/hyprland.sh <pfad/zu/tippkraft>
+# dass `tippkraft focus` jeden Fensterwechsel meldet. Aufruf: tests/compositor/hyprland.sh <pfad/zu/tippkraft>
 set -euo pipefail
 BIN=$(realpath "${1:?Pfad zur tippkraft-Binärdatei}")
 : "${WAYLAND_DISPLAY:?Hyprland läuft verschachtelt und braucht WAYLAND_DISPLAY}"
@@ -45,7 +45,7 @@ sleep 0.3
 hyprctl -q dispatch closewindow class:eins
 sleep 0.5
 
-erwartet=$'fokus: -\nfokus: eins\nfokus: zwei\nfokus: eins\nfokus: zwei'
+erwartet=$'focus: -\nfocus: eins\nfocus: zwei\nfocus: eins\nfocus: zwei'
 if [ "$(cat "$LOG")" = "$erwartet" ]; then
   echo "Hyprland: ok"
 else

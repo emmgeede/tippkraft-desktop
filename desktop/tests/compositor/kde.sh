@@ -30,12 +30,12 @@ echo "KDE Zwischenablage: ok"
 LOG="$XDG_RUNTIME_DIR/fokus.log"
 "$BIN" fokus > "$LOG" 2>&1 &
 sleep 1.5
-warten() { for _ in $(seq 100); do grep -qx "fokus: $1" "$LOG" && return; sleep 0.1; done; fehler "kein 'fokus: $1' – $(cat "$LOG")"; }
+warten() { for _ in $(seq 100); do grep -qx "focus: $1" "$LOG" && return; sleep 0.1; done; fehler "kein 'focus: $1' – $(cat "$LOG")"; }
 foot --app-id=eins sleep 60 & EINS=$!
 warten eins
 foot --app-id=zwei sleep 60 & ZWEI=$!
 warten zwei
 kill $ZWEI
 sleep 1
-[ "$(tail -1 "$LOG")" = "fokus: eins" ] || fehler "nach Schließen nicht zurück auf eins – $(cat "$LOG")"
+[ "$(tail -1 "$LOG")" = "focus: eins" ] || fehler "nach Schließen nicht zurück auf eins – $(cat "$LOG")"
 echo "KDE Fokus: ok"

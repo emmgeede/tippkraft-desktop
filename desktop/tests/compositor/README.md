@@ -1,6 +1,6 @@
 # Compositor tests (F22)
 
-Checks that `tippkraft fokus` reports every window focus change on real compositors.
+Checks that `tippkraft focus` reports every window focus change on real compositors.
 
 ## Sway (headless, runs in CI)
 

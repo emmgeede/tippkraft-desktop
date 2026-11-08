@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# F22: startet Sway ohne Bildschirm und prüft, dass `tippkraft fokus` jeden Fensterwechsel meldet.
+# F22: startet Sway ohne Bildschirm und prüft, dass `tippkraft focus` jeden Fensterwechsel meldet.
 # Aufruf: tests/compositor/sway.sh <pfad/zu/tippkraft>   (braucht sway, swaymsg, foot)
 set -euo pipefail
 BIN=$(realpath "${1:?Pfad zur tippkraft-Binärdatei}")
@@ -32,7 +32,7 @@ sleep 0.3
 swaymsg -q "[app_id=eins] kill"
 sleep 0.5
 
-erwartet=$'fokus: -\nfokus: eins\nfokus: zwei\nfokus: eins\nfokus: -\nfokus: zwei'
+erwartet=$'focus: -\nfocus: eins\nfocus: zwei\nfocus: eins\nfocus: -\nfocus: zwei'
 if [ "$(cat "$LOG")" = "$erwartet" ]; then
   echo "Sway: ok"
 else

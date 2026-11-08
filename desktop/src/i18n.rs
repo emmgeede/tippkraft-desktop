@@ -122,24 +122,28 @@ pub fn text(s: Sprache, t: T) -> &'static str {
     use T::*;
     let (en, de) = match t {
         Hilfe => (
-            "tippkraft – text expander for Wayland
+            "tippkraft – text expander for Linux
 
   tippkraft setup        Install, set up autostart, start and connect to your account
+  tippkraft setup --shortcuts   Ask again about the keyboard shortcuts
   tippkraft connect      Connect to your account (opens the browser, confirm there)
   tippkraft status       Show the current state
   tippkraft pause        Pause or resume (releases the keyboard)
   tippkraft overview     Show and filter all snippets (Mod+Alt+Space)
-  tippkraft run [--verzoegerung MS] [--stand FILE] [--geraet /dev/input/eventN] [--trocken]
+  tippkraft focus        Show the name of each window you click into (for excluded apps)
+  tippkraft run [--delay MS] [--state FILE] [--device /dev/input/eventN] [--dry-run]
 
 Emergency stop: left Ctrl + left Alt + Backspace quits tippkraft immediately.",
-            "tippkraft – Textexpander für Wayland
+            "tippkraft – Textexpander für Linux
 
   tippkraft setup        Installieren, Autostart einrichten, starten und mit dem Konto verbinden
+  tippkraft setup --shortcuts   Erneut nach den Tastenkürzeln fragen
   tippkraft connect      Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
   tippkraft status       Zustand anzeigen
   tippkraft pause        Pausieren bzw. fortsetzen (gibt die Tastatur frei)
   tippkraft overview     Alle Bausteine anzeigen und filtern (Mod+Alt+Leertaste)
-  tippkraft run [--verzoegerung MS] [--stand DATEI] [--geraet /dev/input/eventN] [--trocken]
+  tippkraft focus        Namen jedes angeklickten Fensters zeigen (für die Ausschlussliste)
+  tippkraft run [--delay MS] [--state DATEI] [--device /dev/input/eventN] [--dry-run]
 
 Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
         ),

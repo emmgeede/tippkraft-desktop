@@ -78,7 +78,7 @@ fn durchgang(name: &str, stand: &str, ablauf: impl FnOnce(&mut VirtualDevice)) -
     let mut q = quelle();
     let mut tk = Kill(
         Command::new(env!("CARGO_BIN_EXE_tippkraft"))
-            .args(["run", "--stand", stand_datei.to_str().unwrap()])
+            .args(["run", "--state", stand_datei.to_str().unwrap()])
             .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
