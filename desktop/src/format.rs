@@ -413,8 +413,18 @@ enum Rahmen {
 }
 
 fn bedingung(b: &str, vars: &std::collections::HashMap<String, String>) -> bool {
+    // F60: Teile mit || oder && verknüpft (der Server lässt nur eins von beiden zu).
+    // In formatierten Bausteinen stehen < > & als Entities, auch in den maskierten Werten.
+    entities(b).split("||").any(|oder| oder.split("&&").all(|und| vergleich(und.trim(), vars)))
+}
+
+fn entities(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
+}
+
+fn vergleich(b: &str, vars: &std::collections::HashMap<String, String>) -> bool {
     // F57: {{#if Name}}, {{#if !Name}}, {{#if Name OP Wert}} mit OP = != >= <= !~ = > < ~, Wert fest oder $Variable
-    let wert = |n: &str| vars.get(n.trim().trim_start_matches('$').trim()).map(|w| w.trim().to_string()).unwrap_or_default();
+    let wert = |n: &str| vars.get(n.trim().trim_start_matches('$').trim()).map(|w| entities(w.trim())).unwrap_or_default();
     let Some(i) = b.find(['=', '!', '<', '>', '~']) else { return !wert(b).is_empty() };
     if i == 0 && b.starts_with('!') && !b[1..].contains(['=', '!', '<', '>', '~']) {
         return wert(&b[1..]).is_empty();
@@ -684,6 +694,22 @@ mod tests {
         // als Block
         assert_eq!(einsetzen("{{?Betrag}}{{#if Betrag>=100}} Rabatt{{#else}} kein Rabatt{{#end}}", &w(&[("Betrag", "150")]), &auto), "150 Rabatt");
         assert_eq!(einsetzen("{{#set Art}}{{?Art:Privat|Firma}}{{#end}}{{#if Art=Firma}}Sehr geehrte Damen und Herren{{#else}}Hallo{{#end}}", &w(&[("Art", "Firma")]), &auto), "Sehr geehrte Damen und Herren");
+    }
+
+    #[test]
+    fn und_oder_und_entities_f60() {
+        let auto = auto_f42();
+        let t = "{{#if A && B}}j{{#else}}n{{#end}}";
+        assert_eq!(einsetzen(t, &w(&[("A", "1"), ("B", "x")]), &auto), "j");
+        assert_eq!(einsetzen(t, &w(&[("A", "1"), ("B", "")]), &auto), "n");
+        let o = "{{#if P>=100 || V=ja || !K}}j{{#else}}n{{#end}}";
+        assert_eq!(einsetzen(o, &w(&[("P", "5"), ("V", "nein"), ("K", "x")]), &auto), "n");
+        assert_eq!(einsetzen(o, &w(&[("P", "5"), ("V", "Ja"), ("K", "x")]), &auto), "j");
+        assert_eq!(einsetzen(o, &w(&[("P", "5"), ("V", "nein"), ("K", "")]), &auto), "j");
+        // formatiert: Bedingung und maskierte Werte mit Entities
+        let h = "{{#if P&gt;5 &amp;&amp; F=M&amp;S}}j{{#else}}n{{#end}}";
+        assert_eq!(einsetzen(h, &w(&[("P", "6"), ("F", "M&amp;S")]), &auto), "j");
+        assert_eq!(einsetzen(h, &w(&[("P", "5"), ("F", "M&amp;S")]), &auto), "n");
     }
 
     #[test]
