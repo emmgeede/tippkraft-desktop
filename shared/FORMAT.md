@@ -65,3 +65,9 @@ Formatversion bleibt 2. Ältere Desktops tippen diese Makros als Text.
 - Namen von Variablen, Abfragen und Auswahlen enthalten kein `<`, `>`, `~` (Server lehnt ab).
 - Eine Abfrage nur für die Bedingung: `{{#set Name}}{{?Name:a|b}}{{#end}}` fragt, fügt aber nichts ein.
 - Desktop ab 0.1.20. Ältere werten neue Vergleiche als „nicht ausgefüllt“ und nehmen den Sonst-Zweig.
+
+## UND/ODER, Skript-Schreibweise (F60)
+
+- `{{#if A && B}}`, `{{#if A || B=x}}`: Teile wie bei F57, höchstens 5, verknüpft entweder mit `&&` oder mit `||`. Gemischt lehnt der Server ab. Desktop ab 0.1.21, ältere nehmen den Sonst-Zweig.
+- In formatierten Bausteinen (`html`) stehen `<`, `>`, `&`, `"` im Bedingungskopf als Entities. Der Desktop dekodiert Kopf und Werte vor dem Vergleich.
+- Bausteine in Skript-Schreibweise (`#if`-Zeilen, `§Name`) übersetzt der Server vor dem Speichern in die Klammer-Schreibweise. Der Snapshot enthält nur `inhalt`, das Format ändert sich dadurch nicht. Übersetzte `#else if`-Ketten können tiefer verschachtelt sein als 5 Ebenen.
