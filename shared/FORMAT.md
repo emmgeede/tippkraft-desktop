@@ -70,4 +70,4 @@ Formatversion bleibt 2. Ältere Desktops tippen diese Makros als Text.
 
 - `{{#if A && B}}`, `{{#if A || B=x}}`: Teile wie bei F57, höchstens 5, verknüpft entweder mit `&&` oder mit `||`. Gemischt lehnt der Server ab. Desktop ab 0.1.21, ältere nehmen den Sonst-Zweig.
 - In formatierten Bausteinen (`html`) stehen `<`, `>`, `&`, `"` im Bedingungskopf als Entities. Der Desktop dekodiert Kopf und Werte vor dem Vergleich.
-- Bausteine in Skript-Schreibweise (`#if`-Zeilen, `§Name`) übersetzt der Server vor dem Speichern in die Klammer-Schreibweise. Der Snapshot enthält nur `inhalt`, das Format ändert sich dadurch nicht. Übersetzte `#else if`-Ketten können tiefer verschachtelt sein als 5 Ebenen.
+- Bausteine in Skript-Schreibweise (`#if`-Zeilen, `%Name`) übersetzt der Server vor dem Speichern in die Klammer-Schreibweise. Der Snapshot enthält nur `inhalt`, das Format ändert sich dadurch nicht. Übersetzte `#else if`-Ketten können tiefer verschachtelt sein als 5 Ebenen.
