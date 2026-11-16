@@ -2,7 +2,21 @@
 
 The desktop client of [tippkraft](https://tippkraft.com), a text expander for Linux on Wayland and X11: type an abbreviation and tippkraft types the snippet, in every app, with your keyboard layout, umlauts and emoji. You manage your snippets in the web app, the desktop client keeps a local copy and works offline.
 
-This repository is open source (MIT) so you can check what a program that reads your keyboard actually does. The web app and server are not part of it.
+![tippkraft typing snippets with accents and fill-in fields](docs/demo.gif)
+
+Works on GNOME, KDE Plasma, Niri, Sway, Hyprland and X11 desktops. Imports snippets from TextExpander and PhraseExpress.
+
+This repository (the desktop client) is open source under the MIT license, so you can check what a program that reads your keyboard actually does. The web app and server are not part of it. [SECURITY.md](SECURITY.md) explains what the client reads, stores and sends.
+
+## Pricing
+
+The desktop client is free. Your snippets live in a tippkraft account:
+
+- **Free:** 1 device, 25 snippets, forever.
+- **Pro:** 3 devices, 500 snippets, formatted text. $2.99 / €2.99 per month or $29 / €29 for the first year.
+- **Business:** shared company snippets, 5 users included. $19 / €19 per month.
+
+Current details and taxes: [tippkraft.com/en#preise](https://tippkraft.com/en#preise).
 
 ## Install
 
@@ -29,6 +43,8 @@ The script downloads the latest release from this repository, verifies its SHA-2
 - It never grabs mice or touch devices, only plain keyboards.
 - In programs on your exclusion list (for example password managers) it doesn't trigger at all.
 - It talks only to the tippkraft server you connected (by default `https://tippkraft.com`) to fetch your snippets.
+
+Details, file locations and how to report a vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Build from source
 
