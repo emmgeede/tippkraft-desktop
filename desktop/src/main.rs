@@ -238,7 +238,12 @@ fn status(pfade: &Pfade) -> Result<(), String> {
     // F21 AC-8: Hinweis aus dem zuletzt geladenen Stand
     let stand = std::fs::read_to_string(&pfade.stand).ok().and_then(|j| format::parse(&j).ok());
     if let Some(v) = stand.and_then(|s| s.desktop_version).filter(|v| format::neuer(v, env!("CARGO_PKG_VERSION"))) {
-        println!("{}", i18n::f(i18n::aktuell(), T::UpdateStatus, &[&v, &INSTALLIEREN]));
+        let paket = std::env::current_exe().is_ok_and(|e| systemweit(&e));
+        if paket {
+            println!("{}", i18n::f(i18n::aktuell(), T::UpdatePaket, &[&v]));
+        } else {
+            println!("{}", i18n::f(i18n::aktuell(), T::UpdateStatus, &[&v, &INSTALLIEREN]));
+        }
     }
     Ok(())
 }
@@ -251,34 +256,42 @@ fn pause(pfade: &Pfade) -> Result<(), String> {
     Ok(())
 }
 
-const UNIT: &str = "[Unit]
+/// Vom Paketmanager installiert (AUR, .deb, RPM): nicht nach ~/.local/bin kopieren, sonst kämen Paket-Updates nie an
+fn systemweit(exe: &std::path::Path) -> bool {
+    exe.starts_with("/usr/")
+}
+
+fn unit(exe: &std::path::Path) -> String {
+    let pfad = if systemweit(exe) { exe.display().to_string() } else { "%h/.local/bin/tippkraft".into() };
+    format!("[Unit]
 Description=tippkraft Textexpander
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/.local/bin/tippkraft run
+ExecStart={} run
 # Exit 0 (Notausschalter) startet nicht neu, Exit 3 (Watchdog) und Abstürze schon
 Restart=on-failure
 RestartSec=2
 
 [Install]
 WantedBy=graphical-session.target
-";
+", pfad)
+}
 
 fn einrichten(args: &[String]) -> Result<(), String> {
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME nicht gesetzt")?);
-    let ziel = home.join(".local/bin/tippkraft");
     let quelle = std::env::current_exe().map_err(|e| e.to_string())?;
+    let ziel = if systemweit(&quelle) { quelle.clone() } else { home.join(".local/bin/tippkraft") };
     if quelle != ziel {
         std::fs::create_dir_all(ziel.parent().unwrap()).map_err(|e| e.to_string())?;
         // über temporäre Datei + rename, damit auch eine laufende alte Version ersetzt werden kann
         let tmp = ziel.with_extension("neu");
         std::fs::copy(&quelle, &tmp).and_then(|_| std::fs::rename(&tmp, &ziel)).map_err(|e| format!("{}: {e}", ziel.display()))?;
     }
-    let unit = home.join(".config/systemd/user/tippkraft.service");
-    std::fs::create_dir_all(unit.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&unit, UNIT).map_err(|e| e.to_string())?;
+    let unit_datei = home.join(".config/systemd/user/tippkraft.service");
+    std::fs::create_dir_all(unit_datei.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&unit_datei, unit(&ziel)).map_err(|e| e.to_string())?;
     let systemctl = std::env::var("TIPPKRAFT_SYSTEMCTL").unwrap_or_else(|_| "systemctl".into());
     for args in [&["--user", "daemon-reload"][..], &["--user", "enable", "tippkraft.service"], &["--user", "restart", "tippkraft.service"]] {
         let ok = std::process::Command::new(&systemctl).args(args).status().map_err(|e| e.to_string())?.success();
@@ -906,6 +919,15 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paketinstallation_bleibt_in_usr() {
+        use std::path::Path;
+        assert!(systemweit(Path::new("/usr/bin/tippkraft")));
+        assert!(!systemweit(Path::new("/home/a/.local/bin/tippkraft")));
+        assert!(unit(Path::new("/usr/bin/tippkraft")).contains("ExecStart=/usr/bin/tippkraft run\n"));
+        assert!(unit(Path::new("/home/a/.local/bin/tippkraft")).contains("ExecStart=%h/.local/bin/tippkraft run\n"));
+    }
 
     fn keys(ks: &[KeyCode]) -> AttributeSet<KeyCode> {
         let mut a = AttributeSet::new();
