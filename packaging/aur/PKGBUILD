@@ -13,9 +13,9 @@ install=tippkraft.install
 source=("tippkraft-$pkgver::https://github.com/emmgeede/tippkraft-desktop/releases/download/v$pkgver/tippkraft-x86_64-linux"
         "LICENSE-$pkgver::https://raw.githubusercontent.com/emmgeede/tippkraft-desktop/v$pkgver/LICENSE"
         "60-tippkraft-uinput.rules")
-sha256sums=('SKIP_UNTIL_RELEASE'
-            'SKIP_UNTIL_RELEASE'
-            'SKIP_UNTIL_RELEASE')
+sha256sums=('8e88a857d32d6075c19a86de2fc9f80bb16e8a2f9d07c3f9d924011996fe510a'
+            '9ba052be04350ff7cd65f01491d5aba8df79edb7bcf53a9f2734133cee3d5386'
+            '85abd3fb5c0351281a3e4a6001f138c251d791c92c0c45baf984fefa1bdb58c7')
 
 package() {
   install -Dm755 "tippkraft-$pkgver" "$pkgdir/usr/bin/tippkraft"
