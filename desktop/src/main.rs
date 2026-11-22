@@ -571,6 +571,11 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
     let start = stand_laden(&pfade.stand);
     i18n::setzen(Sprache::fuer(start.sprache.as_deref()));
     let mut engine = Engine::new(start);
+    // Browser-Erweiterung: in Browsern, in denen sie installiert ist, ersetzt nur sie (einmal pro Minute neu prüfen)
+    let heim = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let mut browser_alt = tippkraft::browser::mit_erweiterung(&heim);
+    engine.browser(browser_alt.clone());
+    let mut browser_pruefung = Instant::now();
     let mut stand_zeit = std::fs::metadata(&pfade.stand).and_then(|m| m.modified()).ok();
 
     // Geräte: mit --geraet nur diese (Tests), sonst alle Tastaturen übernehmen und Zeiger nur lesen
@@ -691,6 +696,14 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
             if tray_zustand.as_ref() != Some(&z) {
                 t.update(|t| t.zustand = z.clone());
                 tray_zustand = Some(z);
+            }
+        }
+        if browser_pruefung.elapsed() > Duration::from_secs(60) {
+            browser_pruefung = Instant::now();
+            let neu = tippkraft::browser::mit_erweiterung(&heim);
+            if neu != browser_alt {
+                engine.browser(neu.clone());
+                browser_alt = neu;
             }
         }
         if letzte_pruefung.elapsed() > Duration::from_secs(1) {

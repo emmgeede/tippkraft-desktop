@@ -62,6 +62,8 @@ struct Rueckgaengig {
 pub struct Engine {
     bausteine: Vec<Baustein>,
     ausschluesse: Vec<String>,
+    /// Browser mit installierter tippkraft-Erweiterung: dort ersetzt die Erweiterung (crate::browser)
+    browser: Vec<String>,
     puffer: Puffer,
     letzte: Option<Rueckgaengig>,
     ausgeschlossen: bool,
@@ -85,7 +87,7 @@ impl std::fmt::Debug for Variablen {
 
 impl Engine {
     pub fn new(stand: Stand) -> Self {
-        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, festes_jetzt: None, feste_zwischenablage: None, variablen: Default::default() };
+        let mut e = Engine { bausteine: vec![], ausschluesse: vec![], browser: vec![], puffer: Puffer::default(), letzte: None, ausgeschlossen: false, festes_datum: None, festes_jetzt: None, feste_zwischenablage: None, variablen: Default::default() };
         e.stand(stand);
         e
     }
@@ -102,7 +104,15 @@ impl Engine {
     /// Fokus auf ein anderes Fenster: Puffer verwerfen, Ausschlussliste prüfen
     pub fn fokus(&mut self, app_id: Option<&str>) {
         self.reset();
-        self.ausgeschlossen = app_id.is_some_and(|a| a == POPUP_APP_ID || a == UEBERSICHT_APP_ID || self.ausschluesse.contains(&a.to_lowercase()));
+        self.ausgeschlossen = app_id.is_some_and(|a| {
+            let a = a.to_lowercase();
+            a == POPUP_APP_ID || a == UEBERSICHT_APP_ID || self.ausschluesse.contains(&a) || self.browser.contains(&a)
+        });
+    }
+
+    /// Browser, in denen die Erweiterung ersetzt (App-IDs klein geschrieben). Wirkt ab dem nächsten Fokuswechsel.
+    pub fn browser(&mut self, apps: Vec<String>) {
+        self.browser = apps;
     }
 
     /// Nur für Tests: festes Datum statt heute
@@ -517,6 +527,19 @@ mod tests {
         tippe(&mut e, "mf");
         e.fokus(Some("firefox"));
         assert_eq!(tippe(&mut e, "g ").last(), Some(&Durchlassen));
+    }
+
+    #[test]
+    fn browser_mit_erweiterung_ersetzt_nicht() {
+        let mut e = engine(vec![b("mfg", "x", Ausloeser::Leertaste)]);
+        e.browser(vec!["firefox".into()]);
+        e.fokus(Some("Firefox"));
+        assert_eq!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen), "im Browser mit Erweiterung ersetzt nur die Erweiterung");
+        e.fokus(Some("kitty"));
+        assert_ne!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen), "außerhalb des Browsers ersetzt die Desktop-App");
+        e.browser(vec![]);
+        e.fokus(Some("firefox"));
+        assert_ne!(tippe(&mut e, "mfg ").last(), Some(&Durchlassen), "ohne Erweiterung ersetzt die Desktop-App auch im Browser");
     }
 
     #[test]
