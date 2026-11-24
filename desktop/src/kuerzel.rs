@@ -250,7 +250,7 @@ pub fn einrichten(env: impl Fn(&str) -> Option<String>, home: &std::path::Path, 
                 Err(d)
             }
         }
-        None if crate::uinput::sitzung(&env) == crate::uinput::Sitzung::Gnome => gsettings(l, false, bin).ok_or_else(|| "gsettings".into()),
+        Some(Quelle::Gnome) => gsettings(l, false, bin).ok_or_else(|| "gsettings".into()),
         None => Err("unbekannter Desktop".into()),
     }
 }

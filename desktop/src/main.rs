@@ -207,6 +207,9 @@ fn tastenkuerzel_zeilen(home: &std::path::Path, ziel: &std::path::Path) {
                 _ => if de { "Cinnamon: Systemeinstellungen → Tastatur → Tastenkombinationen → Benutzerdefinierte Tastenkombination hinzufügen" } else { "Cinnamon: System Settings → Keyboard → Shortcuts → Add custom shortcut" },
             };
             println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
+        } else if q == tippkraft::fokus::Quelle::Gnome {
+            let weg = if i18n::aktuell() == Sprache::De { "Einstellungen → Tastatur → Tastenkürzel anzeigen und anpassen → Eigene Tastenkürzel" } else { "Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts" };
+            println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&name, &weg]));
         } else if q == tippkraft::fokus::Quelle::Kde {
             // F11 AC-10: KDE hat keine Konfigurationsdatei dafür, also der Weg in den Systemeinstellungen
             let weg = if i18n::aktuell() == Sprache::De { "Systemeinstellungen → Tastatur → Kurzbefehle → Neu → Befehl oder Skript" } else { "System Settings → Keyboard → Shortcuts → Add New → Command or Script" };
@@ -214,10 +217,6 @@ fn tastenkuerzel_zeilen(home: &std::path::Path, ziel: &std::path::Path) {
         } else {
             println!("\n{}\n\n{zeilen}\n", i18n::f(i18n::aktuell(), T::Tastenkuerzel, &[&name, &datei]));
         }
-    } else if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
-        let weg = if i18n::aktuell() == Sprache::De { "Einstellungen → Tastatur → Tastenkürzel anzeigen und anpassen → Eigene Tastenkürzel" } else { "Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts" };
-        let bin = ziel.display();
-        println!("\n{}\n\nSuper+Alt+T: {bin} pause\nSuper+Alt+Space: {bin} overview\n", i18n::f(i18n::aktuell(), T::TastenDesktop, &[&"GNOME", &weg]));
     }
 }
 
@@ -229,7 +228,9 @@ fn status(pfade: &Pfade) -> Result<(), String> {
     println!("{antwort}");
     // F11 AC-8, AC-12: was unter GNOME fehlt
     if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
-        println!("{}", tr(T::AusschlussGnome));
+        if !tippkraft::gnome::aktiv() {
+            println!("{}", tr(T::AusschlussGnome));
+        }
         let erweiterung = std::process::Command::new("gnome-extensions").args(["list", "--enabled"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("appindicator")).unwrap_or(true);
         if !erweiterung {
             println!("{}", tr(T::TrayGnome));
@@ -315,7 +316,11 @@ fn einrichten(args: &[String]) -> Result<(), String> {
     // F43: Tastenkürzel nach einmaliger Rückfrage einrichten, sonst wie bisher zum Kopieren ausgeben
     tastenkuerzel(&home, &ziel, args.iter().any(|a| a == "--shortcuts" || a == "--tastenkuerzel"));
     if tippkraft::uinput::sitzung(|k| std::env::var(k).ok().filter(|v| !v.is_empty())) == tippkraft::uinput::Sitzung::Gnome {
-        println!("{}\n{}\n", tr(T::AusschlussGnome), tr(T::TrayGnome));
+        let _ = tippkraft::gnome::installieren(&home);
+        if !tippkraft::gnome::aktiv() {
+            println!("{}", tr(T::AusschlussGnome));
+        }
+        println!("{}\n", tr(T::TrayGnome));
     }
     let pfade = Pfade::aus_umgebung();
     if Zugang::laden(&pfade.zugang).is_some() {

@@ -185,7 +185,7 @@ Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
             "Shortcuts for {0}: open {1} and add two custom shortcuts:",
             "Tastenkürzel für {0}: {1} öffnen und zwei eigene Kurzbefehle anlegen:"
         ),
-        AusschlussGnome => ("Note: the exclusion list does not work on GNOME yet. tippkraft expands in every window.", "Hinweis: Die Ausschlussliste wirkt unter GNOME noch nicht. tippkraft löst in jedem Fenster aus."),
+        AusschlussGnome => ("Note: log out and back in once so GNOME loads the \"tippkraft focus\" extension. Until then the exclusion list does not work and tippkraft expands in every window.", "Hinweis: Einmal ab- und wieder anmelden, damit GNOME die Erweiterung \"tippkraft focus\" lädt. Bis dahin wirkt die Ausschlussliste nicht und tippkraft löst in jedem Fenster aus."),
         TrayGnome => (
             "No tray icon? Install and enable the GNOME extension \"AppIndicator and KStatusNotifierItem Support\".",
             "Kein Tray-Symbol? Die GNOME-Erweiterung \"AppIndicator and KStatusNotifierItem Support\" installieren und einschalten."

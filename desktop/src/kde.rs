@@ -29,13 +29,19 @@ fn kwin(conn: &zbus::blocking::Connection, methode: &str, body: &(impl serde::Se
     conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), methode, body)
 }
 
-pub fn beobachten(melden: &mut dyn FnMut(Option<String>)) -> Result<(), String> {
+/// D-Bus-Dienst com.tippkraft.Fokus, den das KWin-Skript und die GNOME-Erweiterung aufrufen
+pub fn dienst() -> Result<(zbus::blocking::Connection, std::sync::mpsc::Receiver<String>), String> {
     let (tx, rx) = channel();
     let conn = zbus::blocking::connection::Builder::session()
         .and_then(|b| b.name(NAME))
         .and_then(|b| b.serve_at("/Fokus", Fokus { tx }))
         .and_then(|b| b.build())
         .map_err(|e| format!("D-Bus nicht erreichbar: {e}"))?;
+    Ok((conn, rx))
+}
+
+pub fn beobachten(melden: &mut dyn FnMut(Option<String>)) -> Result<(), String> {
+    let (conn, rx) = dienst()?;
     let datei = std::env::temp_dir().join(format!("{SKRIPT}-{}.js", std::process::id()));
     std::fs::write(&datei, SKRIPT_JS).map_err(|e| e.to_string())?;
     let _ = kwin(&conn, "unloadScript", &(SKRIPT,));
