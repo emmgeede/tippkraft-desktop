@@ -5,6 +5,7 @@ pub mod fokus;
 pub mod format;
 pub mod hyprland;
 pub mod i18n;
+pub mod gnome;
 pub mod kde;
 pub mod niri;
 pub mod popup;
