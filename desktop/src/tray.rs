@@ -12,6 +12,8 @@ pub struct TrayZustand {
     pub sprache: Sprache,
     /// Neuere Version, falls verfügbar (F21)
     pub update: Option<String>,
+    /// #196: (Anzeigename, aktiv) je gespeichertem Konto
+    pub konten: Vec<(String, bool)>,
 }
 
 fn verbindung_kurz(s: Sprache, v: Verbindung) -> &'static str {
@@ -103,11 +105,40 @@ pub enum TrayAktion {
     Verbinden,
     Update,
     Beenden,
+    /// #196: zu Konto Nr. i wechseln
+    Konto(usize),
 }
 
 pub struct Tray {
     pub zustand: TrayZustand,
     pub senden: Box<dyn Fn(TrayAktion) + Send>,
+}
+
+impl Tray {
+    /// #196: Untermenü nur, wenn mehr als ein Konto gespeichert ist
+    fn konto_menue(&self) -> Option<ksni::MenuItem<Self>> {
+        use ksni::menu::{CheckmarkItem, SubMenu};
+        if self.zustand.konten.len() < 2 {
+            return None;
+        }
+        let submenu = self
+            .zustand
+            .konten
+            .iter()
+            .enumerate()
+            .map(|(i, (name, aktiv))| {
+                CheckmarkItem {
+                    label: name.clone(),
+                    checked: *aktiv,
+                    enabled: !aktiv,
+                    activate: Box::new(move |t: &mut Self| (t.senden)(TrayAktion::Konto(i))),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .collect();
+        Some(SubMenu { label: text(self.zustand.sprache, T::TrayKonto).into(), submenu, ..Default::default() }.into())
+    }
 }
 
 impl ksni::Tray for Tray {
@@ -146,6 +177,9 @@ impl ksni::Tray for Tray {
             eintrag(text(s, T::TrayUebersicht), TrayAktion::Uebersicht),
             eintrag(text(s, T::TrayWebtool), TrayAktion::Webtool),
             eintrag(text(s, T::TrayNeuVerbinden), TrayAktion::Verbinden),
+        ])
+        .chain(self.konto_menue())
+        .chain(vec![
             ksni::MenuItem::Separator,
             eintrag(text(s, T::TrayBeenden), TrayAktion::Beenden),
         ])
@@ -158,7 +192,7 @@ mod tests {
     use super::*;
 
     fn z(pausiert: bool, verbindung: Verbindung) -> TrayZustand {
-        TrayZustand { pausiert, verbindung, anzahl: 3, server: "http://localhost:4321".into(), sprache: Sprache::De, update: None }
+        TrayZustand { pausiert, verbindung, anzahl: 3, server: "http://localhost:4321".into(), sprache: Sprache::De, update: None, konten: Vec::new() }
     }
 
     /// ARGB eines Pixels

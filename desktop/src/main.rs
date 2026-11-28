@@ -42,6 +42,7 @@ fn main() {
     let ergebnis = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..], pfade),
         Some("verbinden" | "connect") => verbinden(&pfade, &args[1..]),
+        Some("account" | "konto") => konto(&pfade, &args[1..]),
         Some("login") => Err(format!("{}\n\n{}", tr(T::LoginWeg), tr(T::Hilfe))),
         Some("status") => status(&pfade),
         Some("pause") => pause(&pfade),
@@ -139,6 +140,46 @@ fn verbinden(pfade: &Pfade, args: &[String]) -> Result<(), String> {
             benachrichtigen(&format!("tippkraft: {e}"));
             Err(e)
         }
+    }
+}
+
+/// #196: Konten anzeigen, wechseln, entfernen
+fn konto(pfade: &Pfade, args: &[String]) -> Result<(), String> {
+    let konten = sync::konten_laden(pfade);
+    if konten.is_empty() {
+        return Err(tr(T::KontoKeine).into());
+    }
+    let finden = |w: &str| sync::konto_finden(&konten, w).ok_or_else(|| i18n::f(i18n::aktuell(), T::KontoUnbekannt, &[&w]));
+    match args {
+        [] => {
+            let aktiv = sync::aktiv_index(pfade, &konten);
+            for (i, k) in konten.iter().enumerate() {
+                println!("{} {}  {}", if aktiv == Some(i) { "*" } else { " " }, i + 1, k.name());
+            }
+            println!("\n{}", tr(T::KontoHinweis));
+            Ok(())
+        }
+        [o, w] if o == "remove" || o == "entfernen" => {
+            let weg = sync::konto_entfernen(pfade, finden(w)?)?;
+            println!("{}", i18n::f(i18n::aktuell(), T::KontoEntfernt, &[&weg.name()]));
+            Ok(())
+        }
+        [w] => {
+            let z = &konten[finden(w)?];
+            match sync::konto_wechseln(pfade, z) {
+                Ok(n) => {
+                    let text = i18n::f(i18n::aktuell(), T::KontoGewechselt, &[&z.name(), &n]);
+                    println!("{text}");
+                    benachrichtigen(&format!("tippkraft: {text}"));
+                    Ok(())
+                }
+                Err(e) => {
+                    benachrichtigen(&format!("tippkraft: {e}"));
+                    Err(e)
+                }
+            }
+        }
+        _ => Err(tr(T::Hilfe).to_string()),
     }
 }
 
@@ -625,7 +666,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
     }
     {
         let tx = tx.clone();
-        let pfade = Pfade { zugang: pfade.zugang.clone(), stand: pfade.stand.clone(), socket: pfade.socket.clone() };
+        let pfade = Pfade { zugang: pfade.zugang.clone(), konten: pfade.konten.clone(), stand: pfade.stand.clone(), socket: pfade.socket.clone() };
         std::thread::spawn(move || sync::schleife(&pfade, |m| drop(tx.send(Ereignis::Sync(m)))));
     }
 
@@ -634,7 +675,7 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
         use ksni::blocking::TrayMethods;
         let tx = tx.clone();
         let t = tippkraft::tray::Tray {
-            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new(), sprache: i18n::aktuell(), update: None },
+            zustand: tippkraft::tray::TrayZustand { pausiert: false, verbindung: Verbindung::NichtAngemeldet, anzahl: engine.anzahl(), server: String::new(), sprache: i18n::aktuell(), update: None, konten: Vec::new() },
             senden: Box::new(move |a| drop(tx.send(Ereignis::Tray(a)))),
         };
         // Dienst startet oft vor der DMS-Leiste: dann warten, bis der Watcher da ist, statt aufzugeben
@@ -697,6 +738,11 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                 server: Zugang::laden(&pfade.zugang).map(|z| z.server).unwrap_or_default(),
                 sprache: i18n::aktuell(),
                 update: update.clone(),
+                konten: {
+                    let k = sync::konten_laden(&pfade);
+                    let a = sync::aktiv_index(&pfade, &k);
+                    k.iter().enumerate().map(|(i, z)| (z.name(), a == Some(i))).collect()
+                },
             };
             if tray_zustand.as_ref() != Some(&z) {
                 t.update(|t| t.zustand = z.clone());
@@ -812,6 +858,11 @@ fn run(args: &[String], mut pfade: Pfade) -> Result<(), String> {
                     TrayAktion::Uebersicht => {
                         if let Ok(exe) = std::env::current_exe() {
                             let _ = std::process::Command::new(exe).arg("overview").spawn();
+                        }
+                    }
+                    TrayAktion::Konto(i) => {
+                        if let Ok(exe) = std::env::current_exe() {
+                            let _ = std::process::Command::new(exe).args(["account", &(i + 1).to_string()]).spawn();
                         }
                     }
                     TrayAktion::Verbinden => {
