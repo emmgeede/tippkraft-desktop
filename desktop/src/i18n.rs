@@ -119,6 +119,13 @@ pub enum T {
     AuslLeertaste,
     AuslEnter,
     AuslTab,
+    KontoAktivEntfernen,
+    KontoKeine,
+    KontoUnbekannt,
+    KontoGewechselt,
+    KontoEntfernt,
+    KontoHinweis,
+    TrayKonto,
 }
 
 /// Text in der Sprache `s`. Platzhalter in Texten: {0}, {1}, … (siehe `f`)
@@ -131,6 +138,8 @@ pub fn text(s: Sprache, t: T) -> &'static str {
   tippkraft setup        Install, set up autostart, start and connect to your account
   tippkraft setup --shortcuts   Ask again about the keyboard shortcuts
   tippkraft connect      Connect to your account (opens the browser, confirm there)
+  tippkraft account      List connected accounts; tippkraft account <n|email> switches,
+                         tippkraft account remove <n|email> forgets one on this computer
   tippkraft status       Show the current state
   tippkraft pause        Pause or resume (releases the keyboard)
   tippkraft overview     Show and filter all snippets (Mod+Alt+Space)
@@ -143,6 +152,8 @@ Emergency stop: left Ctrl + left Alt + Backspace quits tippkraft immediately.",
   tippkraft setup        Installieren, Autostart einrichten, starten und mit dem Konto verbinden
   tippkraft setup --shortcuts   Erneut nach den Tastenkürzeln fragen
   tippkraft connect      Mit dem Konto verbinden (öffnet den Browser, dort bestätigen)
+  tippkraft account      Verbundene Konten anzeigen; tippkraft account <nr|e-mail> wechselt,
+                         tippkraft account remove <nr|e-mail> vergisst eins auf diesem Rechner
   tippkraft status       Zustand anzeigen
   tippkraft pause        Pausieren bzw. fortsetzen (gibt die Tastatur frei)
   tippkraft overview     Alle Bausteine anzeigen und filtern (Mod+Alt+Leertaste)
@@ -193,6 +204,13 @@ Notausschalter: linke Strg + linke Alt + Backspace beendet tippkraft sofort.",
         UpdateStatus => ("Update available: {0}. Install with: {1}", "Update verfügbar: {0}. Installieren mit: {1}"),
         UpdatePaket => ("Update available: {0}. Update it with your package manager.", "Update verfügbar: {0}. Mit dem Paketmanager aktualisieren."),
         TrayNeuVerbinden => ("Reconnect …", "Neu verbinden …"),
+        TrayKonto => ("Switch account", "Konto wechseln"),
+        KontoAktivEntfernen => ("This is the active account. Switch to another one first.", "Das ist das aktive Konto. Wechsle zuerst zu einem anderen."),
+        KontoKeine => ("Not connected yet: tippkraft connect", "Noch nicht verbunden: tippkraft connect"),
+        KontoUnbekannt => ("No such account: {0}. List them with: tippkraft account", "Kein solches Konto: {0}. Liste mit: tippkraft account"),
+        KontoGewechselt => ("Switched to {0} ({1} snippets)", "Gewechselt zu {0} ({1} Bausteine)"),
+        KontoEntfernt => ("Removed {0} from this computer. To free its device slot, disconnect the device in the web app.", "{0} von diesem Rechner entfernt. Um den Geräteplatz freizugeben, trenne das Gerät im Webtool."),
+        KontoHinweis => ("Add another account: tippkraft connect (log in to the other account in the browser first)", "Weiteres Konto: tippkraft connect (vorher im Browser beim anderen Konto anmelden)"),
         TrayBeenden => ("Quit", "Beenden"),
         BrowserOeffnet => ("Opening your browser. If it does not open, visit:", "Browser öffnet sich. Falls nicht, diese Adresse öffnen:"),
         VerbundenMit => ("Connected to {0}, {1} snippets", "Verbunden mit {0}, {1} Bausteine"),

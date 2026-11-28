@@ -13,6 +13,8 @@ use crate::i18n::{T, f, tr};
 /// Wo tippkraft seine Dateien ablegt (XDG, für Tests per Umgebung umlenkbar)
 pub struct Pfade {
     pub zugang: PathBuf,
+    /// #196: alle verbundenen Konten dieses Rechners, `zugang` ist das aktive
+    pub konten: PathBuf,
     pub stand: PathBuf,
     pub socket: PathBuf,
 }
@@ -24,6 +26,7 @@ impl Pfade {
         let laufzeit = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
         Pfade {
             zugang: xdg("XDG_CONFIG_HOME", ".config").join("tippkraft/zugang.json"),
+            konten: xdg("XDG_CONFIG_HOME", ".config").join("tippkraft/konten.json"),
             stand: xdg("XDG_DATA_HOME", ".local/share").join("tippkraft/stand.json"),
             socket: laufzeit.join("tippkraft.sock"),
         }
@@ -34,6 +37,9 @@ impl Pfade {
 pub struct Zugang {
     pub server: String,
     pub token: String,
+    /// #196: E-Mail des Kontos (ältere Server liefern sie nicht)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub email: String,
 }
 
 impl std::fmt::Debug for Zugang {
@@ -46,6 +52,70 @@ impl Zugang {
     pub fn laden(pfad: &Path) -> Option<Zugang> {
         serde_json::from_str(&std::fs::read_to_string(pfad).ok()?).ok()
     }
+    /// Anzeigename im Menü und in `tippkraft account`
+    pub fn name(&self) -> String {
+        if self.email.is_empty() { self.server.clone() } else { format!("{} ({})", self.email, self.server.trim_start_matches("https://")) }
+    }
+    fn gleich(&self, o: &Zugang) -> bool {
+        self.server == o.server && (self.token == o.token || (!self.email.is_empty() && self.email == o.email))
+    }
+}
+
+// ---------- #196: mehrere Konten ----------
+
+/// Gespeicherte Konten. Ohne `konten.json` (ältere Version) zählt das aktive Konto als einziges (AC-7).
+pub fn konten_laden(pfade: &Pfade) -> Vec<Zugang> {
+    let mut k: Vec<Zugang> = std::fs::read_to_string(&pfade.konten).ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
+    if let Some(a) = Zugang::laden(&pfade.zugang).filter(|a| !k.iter().any(|x| x.gleich(a))) {
+        k.insert(0, a);
+    }
+    k
+}
+
+fn konten_schreiben(pfade: &Pfade, k: &[Zugang]) -> Result<(), String> {
+    privat_schreiben(&pfade.konten, serde_json::to_string_pretty(k).unwrap().as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Konto in die Liste aufnehmen oder dort ersetzen (neuer Token für dasselbe Konto)
+pub fn konto_merken(pfade: &Pfade, z: &Zugang) -> Result<(), String> {
+    let mut k = konten_laden(pfade);
+    match k.iter_mut().find(|x| x.gleich(z)) {
+        Some(x) => *x = z.clone(),
+        None => k.push(z.clone()),
+    }
+    konten_schreiben(pfade, &k)
+}
+
+/// Index des aktiven Kontos in `konten`
+pub fn aktiv_index(pfade: &Pfade, konten: &[Zugang]) -> Option<usize> {
+    let a = Zugang::laden(&pfade.zugang)?;
+    konten.iter().position(|x| x.token == a.token)
+}
+
+/// `1`, `2`, … oder E-Mail → Index
+pub fn konto_finden(konten: &[Zugang], wahl: &str) -> Option<usize> {
+    match wahl.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= konten.len() => Some(n - 1),
+        Ok(_) => None,
+        Err(_) => konten.iter().position(|k| k.email.eq_ignore_ascii_case(wahl)),
+    }
+}
+
+/// Wechsel: holt erst den Stand des Kontos (prüft so den Token), schreibt dann Zugang und Stand.
+/// Schlägt das fehl, bleibt das bisherige Konto aktiv (AC-5). Der Dienst lädt den Stand selbst nach.
+pub fn konto_wechseln(pfade: &Pfade, z: &Zugang) -> Result<usize, String> {
+    zugang_speichern(pfade, z)
+}
+
+/// Entfernt ein nicht aktives Konto lokal (AC-6)
+pub fn konto_entfernen(pfade: &Pfade, i: usize) -> Result<Zugang, String> {
+    let mut k = konten_laden(pfade);
+    if aktiv_index(pfade, &k) == Some(i) {
+        return Err(tr(T::KontoAktivEntfernen).into());
+    }
+    let weg = k.remove(i);
+    konten_schreiben(pfade, &k)?;
+    Ok(weg)
 }
 
 /// Schreibt atomar (temporäre Datei + rename), Datei 0600, Ordner 0700
@@ -258,10 +328,12 @@ fn antworten(mut s: &std::net::TcpStream, status: &str, text: &str) {
     let _ = s.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{html}", html.len()).as_bytes());
 }
 
-fn code_einloesen(server: &str, code: &str, verifier: &str) -> Result<String, String> {
+fn code_einloesen(server: &str, code: &str, verifier: &str) -> Result<(String, String), String> {
     #[derive(Deserialize)]
     struct Antwort {
         token: String,
+        #[serde(default)]
+        email: String,
     }
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(30))).http_status_as_error(false).build().into();
     let mut res = agent
@@ -274,7 +346,7 @@ fn code_einloesen(server: &str, code: &str, verifier: &str) -> Result<String, St
         let msg = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v["error"].as_str().map(String::from));
         return Err(msg.unwrap_or_else(|| format!("Server antwortet {}", res.status())));
     }
-    serde_json::from_str::<Antwort>(&text).map(|a| a.token).map_err(|e| e.to_string())
+    serde_json::from_str::<Antwort>(&text).map(|a| (a.token, a.email)).map_err(|e| e.to_string())
 }
 
 /// `tippkraft verbinden`: Browser öffnen, auf den Rückruf warten, Code gegen Token tauschen, speichern.
@@ -309,7 +381,14 @@ pub fn verbinden(pfade: &Pfade, server: Option<&str>, browser: &str) -> Result<(
                 return Err(tr(T::VerbindenAbgebrochen).into());
             }
             Rueckruf::Code(code) => {
-                let ergebnis = code_einloesen(&server, &code, &verifier).and_then(|token| zugang_speichern(pfade, &Zugang { server: server.clone(), token }));
+                let ergebnis = code_einloesen(&server, &code, &verifier).and_then(|(token, email)| {
+                    let z = Zugang { server: server.clone(), token, email };
+                    // #196 AC-1: das bisherige Konto bleibt in der Liste, das neue kommt dazu
+                    let _ = konto_merken(pfade, &Zugang::laden(&pfade.zugang).unwrap_or_else(|| z.clone()));
+                    let n = zugang_speichern(pfade, &z)?;
+                    konto_merken(pfade, &z)?;
+                    Ok(n)
+                });
                 match &ergebnis {
                     Ok(_) => antworten(&s, "200 OK", tr(T::SeiteVerbunden)),
                     Err(e) => antworten(&s, "200 OK", &f(crate::i18n::aktuell(), T::SeiteFehler, &[e])),
@@ -357,6 +436,10 @@ pub fn schleife(pfade: &Pfade, mut melden: impl FnMut(Meldung)) {
                 let mut erstes = true;
                 for zeile in BufReader::new(res.body_mut().as_reader()).lines() {
                     let Ok(zeile) = zeile else { break };
+                    // #196: Konto gewechselt → Verbindung des alten Kontos beenden (spätestens beim nächsten Ping)
+                    if Zugang::laden(&pfade.zugang).is_none_or(|n| n.token != z.token) {
+                        break;
+                    }
                     let Some((event, data)) = sse.zeile(&zeile) else { continue };
                     if event != "snapshot" {
                         continue;
@@ -472,7 +555,43 @@ mod tests {
 
     #[test]
     fn zugang_debug_zeigt_keinen_token() {
-        let z = Zugang { server: "https://x".into(), token: "tk_geheim".into() };
+        let z = Zugang { server: "https://x".into(), token: "tk_geheim".into(), email: String::new() };
         assert!(!format!("{z:?}").contains("geheim"));
+    }
+
+    #[test]
+    fn konten_alte_installation_merken_finden_entfernen() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tippkraft-konten-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pfade = Pfade { zugang: dir.join("zugang.json"), konten: dir.join("konten.json"), stand: dir.join("stand.json"), socket: dir.join("s") };
+        let z = |t: &str, e: &str| Zugang { server: "https://tippkraft.com".into(), token: t.into(), email: e.into() };
+        assert!(konten_laden(&pfade).is_empty());
+        // AC-7: nur zugang.json (alte Version, ohne E-Mail) → ein Konto, aktiv
+        privat_schreiben(&pfade.zugang, br#"{"server":"https://tippkraft.com","token":"tk_a"}"#).unwrap();
+        let k = konten_laden(&pfade);
+        assert_eq!((k.len(), aktiv_index(&pfade, &k)), (1, Some(0)));
+        assert_eq!(k[0].name(), "https://tippkraft.com");
+        // AC-1: zweites Konto kommt dazu, neuer Token für dasselbe Konto ersetzt statt zu doppeln
+        konto_merken(&pfade, &z("tk_a", "")).unwrap();
+        konto_merken(&pfade, &z("tk_b", "firma@example.com")).unwrap();
+        konto_merken(&pfade, &z("tk_b2", "firma@example.com")).unwrap();
+        let k = konten_laden(&pfade);
+        assert_eq!(k.iter().map(|x| x.token.as_str()).collect::<Vec<_>>(), ["tk_a", "tk_b2"]);
+        assert_eq!(k[1].name(), "firma@example.com (tippkraft.com)");
+        // AC-2/3: Auswahl per Nummer oder E-Mail
+        assert_eq!(konto_finden(&k, "2"), Some(1));
+        assert_eq!(konto_finden(&k, "FIRMA@example.com"), Some(1));
+        assert_eq!(konto_finden(&k, "0"), None);
+        assert_eq!(konto_finden(&k, "3"), None);
+        // AC-6: aktives Konto nicht entfernbar, anderes schon
+        assert!(konto_entfernen(&pfade, 0).is_err());
+        assert_eq!(konto_entfernen(&pfade, 1).unwrap().token, "tk_b2");
+        assert_eq!(konten_laden(&pfade).len(), 1);
+        // AC-9: nur für den Nutzer lesbar
+        assert_eq!(std::fs::metadata(&pfade.konten).unwrap().permissions().mode() & 0o777, 0o600);
+        // Token taucht nicht in Debug auf
+        assert!(!format!("{:?}", z("tk_geheim", "x@y.z")).contains("tk_geheim"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
