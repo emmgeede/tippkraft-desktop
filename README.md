@@ -12,7 +12,7 @@ This repository (the desktop client) is open source under the MIT license, so yo
 
 The desktop client is free. Your snippets live in a tippkraft account:
 
-- **Free:** 1 device, 25 snippets, forever.
+- **Free:** 1 device, 50 snippets, forever.
 - **Pro:** 3 devices, 500 snippets, formatted text. $2.99 / €2.99 per month or $29 / €29 for the first year.
 - **Business:** shared company snippets, 5 users included. $19 / €19 per month.
 
